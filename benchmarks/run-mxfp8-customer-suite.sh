@@ -11,7 +11,7 @@ node_label=${NODE_LABEL:-$(hostname -s)}
 warmup=${WARMUP:-20}
 iterations=${ITERATIONS:-100}
 repeats=${REPEATS:-3}
-groups=${GROUPS:-8}
+num_groups=${NUM_GROUPS:-8}
 
 mkdir -p "${result_dir}"
 
@@ -25,7 +25,7 @@ mkdir -p "${result_dir}"
 
 "${python_bin}" benchmarks/mxfp8-dense-vs-grouped.py \
   --workloads all \
-  --groups "${groups}" \
+  --groups "${num_groups}" \
   --distribution balanced \
   --warmup "${warmup}" \
   --iterations "${iterations}" \
