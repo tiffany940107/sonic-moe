@@ -1,0 +1,2 @@
+# Variable-M blockscaled epilogue support required by the SM120 MXFP8 path.
+quack-kernels @ git+https://github.com/tiffany940107/quack.git@c87c9d1d100b4a2cc56f90099c0b9001d9ae645e

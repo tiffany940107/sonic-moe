@@ -44,6 +44,66 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+### Experimental SM120 MXFP8 grouped inference
+
+The `feature/sm120-mxfp8-varlen-ep` branch adds an inference-only MXFP8
+compute primitive for rows that have already been routed and grouped by local
+expert. It uses OCP E4M3 values, E8M0 scales with semantic 1x32 granularity
+along K, a variable-M grouped GEMM, fused SwiGLU + MXFP8 requantization for
+FC1, and BF16 output for FC2. It requires the matching QuACK varlen-M
+epilogue fix pinned in `requirements-mxfp8.txt`.
+
+"DeepGEMM-aligned" here means the same semantic 1x32 quantization recipe. The
+physical scale tensor uses QuACK/CUTLASS's blocked layout
+`(batch, rm, rk, 32, 4, 4)` and is not a binary-compatible DeepGEMM scale
+buffer.
+
+```bash
+git clone --branch feature/sm120-mxfp8-varlen-ep \
+  https://github.com/tiffany940107/sonic-moe.git
+cd sonic-moe
+python -m pip install -r requirements-mxfp8.txt
+python -m pip install --no-deps -e .
+python -m pytest -q tests/test_mxfp8.py -s
+```
+
+The generic grouped-GEMM API is:
+
+```python
+from sonicmoe import (
+    allocate_mxfp8_weights,
+    mxfp8_grouped_gemm,
+    quantize_varlen_m_operand,
+)
+
+# x_grouped is (sum(M_e), K); cu_seqlens_m is the int32 prefix sum of M_e.
+x_mxfp8 = quantize_varlen_m_operand(x_grouped, cu_seqlens_m)
+weight_mxfp8 = allocate_mxfp8_weights(
+    num_experts, N, K, device="cuda", seed=123
+)
+out_bf16 = mxfp8_grouped_gemm(x_mxfp8, weight_mxfp8, cu_seqlens_m)
+```
+
+Run all six requested `(M, N, K)` workloads with eight balanced groups:
+
+```bash
+python benchmarks/mxfp8-grouped-gemm.py \
+  --workloads all --groups 8 --distribution balanced \
+  --warmup 10 --iterations 50 --jsonl results/mxfp8-grouped.jsonl
+```
+
+The workload set is `8192/16384/32768 x 1280 x 2048` in both N/K
+orientations. Here M means the total local rows across groups. Use
+`--distribution ragged` to stress imbalance, or select one workload and pass
+`--group-ms m0,m1,...` for an exact expert histogram. Quantization, scale
+packing, allocation, and cold kernel compilation are deliberately outside the
+reported kernel latency; every JSON record includes the full `M_e` list.
+
+This extension does not change the existing BF16 `MoE.forward()` path and does
+not implement routing, token permutation, expert-parallel transport, or EPLB.
+Those layers should call the grouped primitive after producing local
+expert-contiguous rows.
+
 ## 🎯 Quick Start
 
 ### Basic Usage
