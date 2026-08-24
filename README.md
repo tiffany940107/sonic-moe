@@ -92,6 +92,22 @@ python benchmarks/mxfp8-grouped-gemm.py \
   --warmup 10 --iterations 50 --jsonl results/mxfp8-grouped.jsonl
 ```
 
+For a same-MNK acceleration comparison against eight per-expert dense launches
+and a one-big-dense efficiency ceiling, run:
+
+```bash
+python benchmarks/mxfp8-dense-vs-grouped.py \
+  --workloads all --groups 8 --distribution balanced \
+  --warmup 20 --iterations 100 --repeats 3 \
+  --node-label my-sm120-node --output results/dense-vs-grouped.json
+```
+
+The reported `speedup_grouped_vs_dense_loop` preserves MoE semantics because
+both paths use the same per-expert weights. `one_big_dense` uses only one
+shared weight and is therefore an efficiency ceiling, not a model-equivalent
+baseline. Cold compilation, quantization, allocation, and scale packing are
+excluded from all three timed paths.
+
 The workload set is `8192/16384/32768 x 1280 x 2048` in both N/K
 orientations. Here M means the total local rows across groups. Use
 `--distribution ragged` to stress imbalance, or select one workload and pass
