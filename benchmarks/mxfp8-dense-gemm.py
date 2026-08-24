@@ -2,18 +2,12 @@
 # ********************************************************************************
 # Copyright (c) 2026 SonicMoE contributors
 # ********************************************************************************
-"""Compare SM120 MXFP8 grouped GEMM with two same-MNK dense baselines.
+"""Benchmark the requested SM120 dense MXFP8 GEMM workloads.
 
-The three timed paths use the same quantized activation bytes, total FLOPs,
-tile configuration, BF16 output dtype, and semantic 1x32 E8M0 scales:
-
-* ``grouped``: one variable-M launch, with a different weight per group;
-* ``dense_loop``: one dense launch per group, with identical MoE semantics;
-* ``one_big_dense``: one launch over total M using a single shared weight.
-
-Only ``dense_loop / grouped`` is an MoE acceleration ratio.  ``one_big_dense``
-is deliberately included as a hardware-efficiency ceiling; it is not the same
-model because all rows use W_0.
+The timed path is one QuACK SM120 block-scaled GEMM with prequantized OCP
+E4M3 values, E8M0 scales at semantic 1x32 granularity along K, and BF16
+output. Allocation, random input generation, quantization, scale packing,
+correctness checks, and cold JIT compilation are outside the measurement.
 """
 
 from __future__ import annotations
@@ -25,7 +19,6 @@ import socket
 import statistics
 import subprocess
 from datetime import UTC, datetime
-from itertools import pairwise
 from pathlib import Path
 
 import torch
@@ -36,40 +29,24 @@ from sonicmoe.functional.mxfp8 import (
     MXFP8_FORMAT,
     Mxfp8MoEKernelConfig,
     allocate_mxfp8_weights,
-    make_varlen_m_operand,
-    mxfp8_grouped_gemm,
     quantize_mxfp8_rows,
 )
 
-WORKLOADS = {
-    "mnk_8k_1280_2k": (8192, 1280, 2048),
-    "mnk_8k_2k_1280": (8192, 2048, 1280),
-    "mnk_16k_1280_2k": (16384, 1280, 2048),
-    "mnk_16k_2k_1280": (16384, 2048, 1280),
-    "mnk_32k_1280_2k": (32768, 1280, 2048),
-    "mnk_32k_2k_1280": (32768, 2048, 1280),
+DENSE_WORKLOADS = {
+    "mnk_8k4k4k": (8192, 4096, 4096),
+    "mnk_16k4k4k": (16384, 4096, 4096),
+    "mnk_32k4k4k": (32768, 4096, 4096),
 }
-METHODS = ("grouped", "dense_loop", "one_big_dense")
-
-
-def _comma_ints(value: str) -> list[int]:
-    try:
-        result = [int(part.strip()) for part in value.split(",") if part.strip()]
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("expected comma-separated integers") from error
-    if not result or any(item < 0 for item in result):
-        raise argparse.ArgumentTypeError("group row counts must be non-negative")
-    return result
 
 
 def _parse_workloads(value: str) -> list[str]:
     if value == "all":
-        return list(WORKLOADS)
+        return list(DENSE_WORKLOADS)
     names = [part.strip() for part in value.split(",") if part.strip()]
-    unknown = [name for name in names if name not in WORKLOADS]
+    unknown = [name for name in names if name not in DENSE_WORKLOADS]
     if not names or unknown:
         raise argparse.ArgumentTypeError(
-            f"choose one or more of {list(WORKLOADS)}, or 'all'; unknown={unknown}"
+            f"choose one or more of {list(DENSE_WORKLOADS)}, or 'all'; unknown={unknown}"
         )
     return names
 
@@ -79,17 +56,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--workloads",
         type=_parse_workloads,
-        default=list(WORKLOADS),
+        default=list(DENSE_WORKLOADS),
         help="comma-separated names, or 'all' (default: all)",
-    )
-    parser.add_argument("--groups", type=int, default=8)
-    parser.add_argument(
-        "--distribution", choices=("balanced", "ragged"), default="balanced"
-    )
-    parser.add_argument(
-        "--group-ms",
-        type=_comma_ints,
-        help="exact M_e list; requires one workload and overrides --distribution",
     )
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
@@ -105,40 +73,9 @@ def parse_args() -> argparse.Namespace:
         "--output", type=Path, help="write the full result document as JSON"
     )
     args = parser.parse_args()
-    if args.groups <= 0:
-        parser.error("--groups must be positive")
     if args.warmup < 0 or args.iterations <= 0 or args.repeats <= 0:
         parser.error("warmup must be non-negative; iterations/repeats must be positive")
-    if args.group_ms is not None:
-        if len(args.workloads) != 1:
-            parser.error("--group-ms requires exactly one workload")
-        if len(args.group_ms) != args.groups:
-            parser.error("--group-ms length must equal --groups")
     return args
-
-
-def _group_rows(total_m: int, groups: int, distribution: str) -> list[int]:
-    if total_m < groups:
-        raise ValueError(f"M={total_m} must be at least groups={groups}")
-    if distribution == "balanced":
-        quotient, remainder = divmod(total_m, groups)
-        return [quotient + (index < remainder) for index in range(groups)]
-
-    remaining = total_m - groups
-    weights = list(range(1, groups + 1))
-    denominator = sum(weights)
-    extras = [remaining * weight // denominator for weight in weights]
-    leftover = remaining - sum(extras)
-    for index in range(groups - leftover, groups):
-        extras[index] += 1
-    return [extra + 1 for extra in extras]
-
-
-def _indptr(group_rows: list[int]) -> torch.Tensor:
-    prefix = [0]
-    for rows in group_rows:
-        prefix.append(prefix[-1] + rows)
-    return torch.tensor(prefix, dtype=torch.int32, device="cuda")
 
 
 def _git_commit(path: Path) -> str | None:
@@ -234,7 +171,6 @@ def _dense_call(
 
 @torch.inference_mode()
 def _benchmark_call(fn, warmup: int, iterations: int) -> dict[str, float]:
-    # Compile before both warmup and timing.  The returned metrics are kernel-only.
     fn()
     torch.cuda.synchronize()
     for _ in range(warmup):
@@ -265,67 +201,33 @@ def _benchmark_call(fn, warmup: int, iterations: int) -> dict[str, float]:
     }
 
 
-def _aggregate(
-    repeats: list[dict[str, dict[str, float]]],
-) -> dict[str, dict[str, float]]:
-    result = {}
-    for method in METHODS:
-        result[method] = {
-            metric: statistics.median(repeat[method][metric] for repeat in repeats)
-            for metric in ("mean_ms", "min_ms", "p50_ms", "p90_ms", "p99_ms", "max_ms")
-        }
-    return result
+def _aggregate(repeats: list[dict[str, float]]) -> dict[str, float]:
+    return {
+        metric: statistics.median(repeat[metric] for repeat in repeats)
+        for metric in ("mean_ms", "min_ms", "p50_ms", "p90_ms", "p99_ms", "max_ms")
+    }
 
 
 @torch.inference_mode()
 def run_workload(
     name: str,
     shape: tuple[int, int, int],
-    group_rows: list[int],
     args: argparse.Namespace,
-    workload_index: int,
 ) -> dict:
     m, n, k = shape
-    if sum(group_rows) != m:
-        raise ValueError(f"sum(M_e)={sum(group_rows)} does not match workload M={m}")
-
     torch.cuda.empty_cache()
     torch.manual_seed(args.seed)
     source = torch.randn(m, k, dtype=torch.bfloat16, device="cuda") * 0.015625
     qdata, linear_sf = quantize_mxfp8_rows(source)
     del source
-    cu = _indptr(group_rows)
-    grouped_a = make_varlen_m_operand(qdata, linear_sf, cu)
-    dense_a = BlockScaledOperand.from_parts(
+    activation = BlockScaledOperand.from_parts(
         qdata, pack_scale_2d_to_blocked_contig(linear_sf), MXFP8_FORMAT
     )
-    weight = allocate_mxfp8_weights(
-        len(group_rows), n, k, device="cuda", seed=args.seed + 1
+    weights = allocate_mxfp8_weights(1, n, k, device="cuda", seed=args.seed + 1)
+    weight = BlockScaledOperand.from_parts(
+        weights.qdata[0], weights.scale[0:1], MXFP8_FORMAT
     )
-    one_dense_w = BlockScaledOperand.from_parts(
-        weight.qdata[0], weight.scale[0:1], MXFP8_FORMAT
-    )
-
-    expert_as = []
-    expert_ws = []
-    cu_host = cu.cpu().tolist()
-    for expert, (lo, hi) in enumerate(pairwise(cu_host)):
-        expert_as.append(
-            BlockScaledOperand.from_parts(
-                qdata[lo:hi],
-                pack_scale_2d_to_blocked_contig(linear_sf[lo:hi]),
-                MXFP8_FORMAT,
-            )
-        )
-        expert_ws.append(
-            BlockScaledOperand.from_parts(
-                weight.qdata[expert], weight.scale[expert : expert + 1], MXFP8_FORMAT
-            )
-        )
-
-    grouped_out = torch.empty(m, n, dtype=torch.bfloat16, device="cuda")
-    loop_out = torch.empty_like(grouped_out)
-    one_dense_out = torch.empty_like(grouped_out)
+    out = torch.empty(m, n, dtype=torch.bfloat16, device="cuda")
     config = Mxfp8MoEKernelConfig(
         fc2_tile_m=args.tile_m,
         fc2_tile_n=args.tile_n,
@@ -333,70 +235,34 @@ def run_workload(
         dynamic_persistent=not args.static_persistent,
     )
 
-    def grouped_fn() -> None:
-        mxfp8_grouped_gemm(grouped_a, weight, cu, config=config, out=grouped_out)
+    def dense_fn() -> None:
+        _dense_call(activation, weight, out, config)
 
-    def dense_loop_fn() -> None:
-        for expert, (lo, hi) in enumerate(pairwise(cu_host)):
-            if hi != lo:
-                _dense_call(
-                    expert_as[expert], expert_ws[expert], loop_out[lo:hi], config
-                )
-
-    def one_big_dense_fn() -> None:
-        _dense_call(dense_a, one_dense_w, one_dense_out, config)
-
-    calls = {
-        "grouped": grouped_fn,
-        "dense_loop": dense_loop_fn,
-        "one_big_dense": one_big_dense_fn,
-    }
-    # Compile all methods, then prove the exact-semantics baselines agree.
-    for fn in calls.values():
-        fn()
+    dense_fn()
     torch.cuda.synchronize()
-    diff = grouped_out.float() - loop_out.float()
-    correctness = {
-        "grouped_vs_dense_loop_rel_l2": float(
-            torch.linalg.vector_norm(diff) / torch.linalg.vector_norm(loop_out.float())
-        ),
-        "grouped_vs_dense_loop_max_abs": float(diff.abs().max()),
-    }
-    if not args.skip_correctness and (
-        not torch.isfinite(grouped_out).all()
-        or correctness["grouped_vs_dense_loop_rel_l2"] > 0.005
-    ):
-        raise AssertionError(f"grouped/dense-loop correctness failed: {correctness}")
-    del diff
+    all_finite = bool(torch.isfinite(out).all())
+    output_abs_max = float(out.abs().max())
+    if not args.skip_correctness and not all_finite:
+        raise AssertionError(f"non-finite output for {name}")
 
-    repeat_results = []
-    for repeat_index in range(args.repeats):
-        offset = (workload_index + repeat_index) % len(METHODS)
-        order = METHODS[offset:] + METHODS[:offset]
-        measured = {
-            method: _benchmark_call(calls[method], args.warmup, args.iterations)
-            for method in order
-        }
-        repeat_results.append({method: measured[method] for method in METHODS})
-    aggregate = _aggregate(repeat_results)
-    grouped_ms = aggregate["grouped"]["p50_ms"]
-    loop_ms = aggregate["dense_loop"]["p50_ms"]
-    one_dense_ms = aggregate["one_big_dense"]["p50_ms"]
+    repeats = [
+        _benchmark_call(dense_fn, args.warmup, args.iterations)
+        for _ in range(args.repeats)
+    ]
+    aggregate = _aggregate(repeats)
+    p50_ms = aggregate["p50_ms"]
     return {
         "workload": name,
-        "m_total": m,
+        "m": m,
         "n": n,
         "k": k,
-        "groups": len(group_rows),
-        "group_rows": group_rows,
-        "distribution": "explicit" if args.group_ms is not None else args.distribution,
         "aggregate": aggregate,
-        "repeat_metrics": repeat_results,
-        "speedup_grouped_vs_dense_loop": loop_ms / grouped_ms,
-        "grouped_efficiency_vs_one_big_dense": one_dense_ms / grouped_ms,
-        "grouped_slowdown_vs_one_big_dense": grouped_ms / one_dense_ms,
-        "grouped_tflops_at_p50": 2.0 * m * n * k / (grouped_ms / 1e3) / 1e12,
-        "correctness": correctness,
+        "repeat_metrics": repeats,
+        "dense_tflops_at_p50": 2.0 * m * n * k / (p50_ms / 1e3) / 1e12,
+        "correctness": {
+            "all_finite": all_finite,
+            "output_abs_max": output_abs_max,
+        },
     }
 
 
@@ -407,14 +273,12 @@ def main() -> int:
 
     document = {
         "schema_version": 1,
-        "benchmark": "sonicmoe_sm120_mxfp8_dense_vs_grouped",
+        "benchmark": "sonicmoe_sm120_mxfp8_dense_gemm",
         "timestamp_utc": datetime.now(UTC).isoformat(),
-        "scope": "prequantized kernel-only; allocation, packing, correctness, and JIT excluded",
+        "scope": "prequantized kernel-only; allocation, packing, checks, and JIT excluded",
         "dtype": "OCP MXFP8 E4M3 values + E8M0 scales; BF16 output",
         "semantic_scale_granularity": "1x32 along reduction K",
         "config": {
-            "groups": args.groups,
-            "distribution": args.distribution,
             "warmup": args.warmup,
             "iterations": args.iterations,
             "repeats": args.repeats,
@@ -432,25 +296,15 @@ def main() -> int:
             {"environment": document["environment"], "config": document["config"]}
         )
     )
-    for index, name in enumerate(args.workloads):
-        shape = WORKLOADS[name]
-        rows = (
-            args.group_ms
-            if args.group_ms is not None
-            else _group_rows(shape[0], args.groups, args.distribution)
-        )
-        result = run_workload(name, shape, rows, args, index)
+    for name in args.workloads:
+        result = run_workload(name, DENSE_WORKLOADS[name], args)
         document["results"].append(result)
         print(
             json.dumps(
                 {
                     "workload": name,
-                    "grouped_p50_ms": result["aggregate"]["grouped"]["p50_ms"],
-                    "dense_loop_p50_ms": result["aggregate"]["dense_loop"]["p50_ms"],
-                    "one_big_dense_p50_ms": result["aggregate"]["one_big_dense"][
-                        "p50_ms"
-                    ],
-                    "speedup": result["speedup_grouped_vs_dense_loop"],
+                    "p50_ms": result["aggregate"]["p50_ms"],
+                    "tflops": result["dense_tflops_at_p50"],
                 },
                 sort_keys=True,
             ),

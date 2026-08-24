@@ -92,6 +92,20 @@ python benchmarks/mxfp8-grouped-gemm.py \
   --warmup 10 --iterations 50 --jsonl results/mxfp8-grouped.jsonl
 ```
 
+Run the three requested standalone dense GEMMs (`8K/16K/32K x 4K x 4K`)
+with the same MXFP8 contract:
+
+```bash
+python benchmarks/mxfp8-dense-gemm.py \
+  --workloads all --warmup 20 --iterations 100 --repeats 3 \
+  --node-label my-sm120-node --output results/mxfp8-dense.json
+```
+
+To collect the dense workloads and all six grouped workloads in one command,
+use `benchmarks/run-mxfp8-customer-suite.sh results/my-node`. The wrapper writes
+one raw JSON document for each benchmark so results from different machines can
+be compared without scraping console output.
+
 For a same-MNK acceleration comparison against eight per-expert dense launches
 and a one-big-dense efficiency ceiling, run:
 
