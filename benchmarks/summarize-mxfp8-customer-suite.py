@@ -158,8 +158,17 @@ def build_report(suites: list[dict], baseline_label: str, output: Path) -> str:
             "- `dense_loop` uses eight distinct expert weights and preserves grouped-MoE "
             "semantics. `one_big_dense` shares one weight and is only an efficiency ceiling."
         ),
+        (
+            "- The discarded Bash `GROUPS` collision and final eight-group rerun are "
+            "documented in the [harness audit](AUDIT.md)."
+        ),
         "",
         "## Environments",
+        "",
+        (
+            "Hostnames, IP addresses, GPU UUIDs, PCI bus IDs, and visible-device indices "
+            "are intentionally omitted. Node labels must be anonymous public aliases."
+        ),
         "",
     ]
 
@@ -169,12 +178,10 @@ def build_report(suites: list[dict], baseline_label: str, output: Path) -> str:
         environment_rows.append(
             [
                 suite["label"],
-                env["hostname"],
                 env["gpu_name"],
                 f"{env['gpu_total_memory_gib']:.1f}",
                 env.get("power.limit", "unknown"),
                 env.get("driver_version", "unknown"),
-                env.get("uuid", "unknown"),
                 (
                     suite["dense"]["environment"]["sonic_commit"][:8]
                     + "/"
@@ -187,12 +194,10 @@ def build_report(suites: list[dict], baseline_label: str, output: Path) -> str:
         _table(
             [
                 "label",
-                "host",
                 "GPU",
                 "GiB",
                 "power W",
                 "driver",
-                "UUID",
                 "Sonic dense/grouped",
                 "QuACK",
             ],

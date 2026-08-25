@@ -98,13 +98,15 @@ with the same MXFP8 contract:
 ```bash
 python benchmarks/mxfp8-dense-gemm.py \
   --workloads all --warmup 20 --iterations 100 --repeats 3 \
-  --node-label my-sm120-node --output results/mxfp8-dense.json
+  --node-label PRO5000-A --output results/mxfp8-dense.json
 ```
 
 To collect the dense workloads and all six grouped workloads in one command,
-use `benchmarks/run-mxfp8-customer-suite.sh results/my-node`. The wrapper writes
-one raw JSON document for each benchmark so results from different machines can
-be compared without scraping console output.
+use `NODE_LABEL=PRO5000-A benchmarks/run-mxfp8-customer-suite.sh results/node-A`.
+`NODE_LABEL` is only a public alias; the harness does not collect hostnames, IP
+addresses, GPU UUIDs, PCI bus IDs, or visible-device indices. The wrapper writes
+one raw JSON document for each benchmark so anonymous results from different
+machines can be compared without scraping console output.
 
 For a same-MNK acceleration comparison against eight per-expert dense launches
 and a one-big-dense efficiency ceiling, run:
@@ -113,7 +115,7 @@ and a one-big-dense efficiency ceiling, run:
 python benchmarks/mxfp8-dense-vs-grouped.py \
   --workloads all --groups 8 --distribution balanced \
   --warmup 20 --iterations 100 --repeats 3 \
-  --node-label my-sm120-node --output results/dense-vs-grouped.json
+  --node-label PRO5000-A --output results/dense-vs-grouped.json
 ```
 
 The reported `speedup_grouped_vs_dense_loop` preserves MoE semantics because

@@ -1,0 +1,179 @@
+{
+  "benchmark": "sonicmoe_sm120_mxfp8_dense_gemm",
+  "config": {
+    "dynamic_persistent": true,
+    "iterations": 100,
+    "pingpong": true,
+    "repeats": 3,
+    "seed": 123,
+    "tile_m": 128,
+    "tile_n": 128,
+    "warmup": 20
+  },
+  "dtype": "OCP MXFP8 E4M3 values + E8M0 scales; BF16 output",
+  "environment": {
+    "driver_version": "580.95.05",
+    "gpu_capability": [
+      12,
+      0
+    ],
+    "gpu_name": "NVIDIA Graphics Device",
+    "gpu_total_memory_gib": 71.12384033203125,
+    "node_label": "PRO5000-A",
+    "power.limit": "350.00",
+    "quack_commit": "c87c9d1d100b4a2cc56f90099c0b9001d9ae645e",
+    "sonic_commit": "f0336561d0287eabd4695506826dc98d45650156",
+    "torch_cuda_version": "13.0",
+    "torch_version": "2.13.0+cu130"
+  },
+  "results": [
+    {
+      "aggregate": {
+        "max_ms": 0.5863040089607239,
+        "mean_ms": 0.5726048016548156,
+        "min_ms": 0.5630720257759094,
+        "p50_ms": 0.5740000009536743,
+        "p90_ms": 0.5756192028522491,
+        "p99_ms": 0.577245461344719
+      },
+      "correctness": {
+        "all_finite": true,
+        "max_abs_vs_dequantized_reference": 0.000244140625,
+        "output_abs_max": 0.11474609375,
+        "relative_l2_threshold": 0.005,
+        "relative_l2_vs_dequantized_reference": 0.001657981425523758
+      },
+      "dense_tflops_at_p50": 478.8813701869393,
+      "k": 4096,
+      "m": 8192,
+      "n": 4096,
+      "repeat_metrics": [
+        {
+          "max_ms": 0.5863040089607239,
+          "mean_ms": 0.5662723189592361,
+          "min_ms": 0.5630720257759094,
+          "p50_ms": 0.5659680068492889,
+          "p90_ms": 0.5674592077732086,
+          "p99_ms": 0.5691334509849549
+        },
+        {
+          "max_ms": 0.5833280086517334,
+          "mean_ms": 0.5726048016548156,
+          "min_ms": 0.5626559853553772,
+          "p50_ms": 0.5740000009536743,
+          "p90_ms": 0.5756192028522491,
+          "p99_ms": 0.577245461344719
+        },
+        {
+          "max_ms": 0.6550400257110596,
+          "mean_ms": 0.6218399977684022,
+          "min_ms": 0.5756160020828247,
+          "p50_ms": 0.6460959911346436,
+          "p90_ms": 0.6539231956005096,
+          "p99_ms": 0.6549766504764557
+        }
+      ],
+      "workload": "mnk_8k4k4k"
+    },
+    {
+      "aggregate": {
+        "max_ms": 1.3389760255813599,
+        "mean_ms": 1.3225737607479096,
+        "min_ms": 1.3133759498596191,
+        "p50_ms": 1.3205440044403076,
+        "p90_ms": 1.335913598537445,
+        "p99_ms": 1.3380256330966949
+      },
+      "correctness": {
+        "all_finite": true,
+        "max_abs_vs_dequantized_reference": 0.000244140625,
+        "output_abs_max": 0.11962890625,
+        "relative_l2_threshold": 0.005,
+        "relative_l2_vs_dequantized_reference": 0.001657805871218443
+      },
+      "dense_tflops_at_p50": 416.31010556214335,
+      "k": 4096,
+      "m": 16384,
+      "n": 4096,
+      "repeat_metrics": [
+        {
+          "max_ms": 1.3440959453582764,
+          "mean_ms": 1.233636164665222,
+          "min_ms": 1.1501120328903198,
+          "p50_ms": 1.2413440346717834,
+          "p90_ms": 1.335913598537445,
+          "p99_ms": 1.343050549030304
+        },
+        {
+          "max_ms": 1.3359040021896362,
+          "mean_ms": 1.3225737607479096,
+          "min_ms": 1.3133759498596191,
+          "p50_ms": 1.3205440044403076,
+          "p90_ms": 1.3338591933250428,
+          "p99_ms": 1.3358723735809326
+        },
+        {
+          "max_ms": 1.3389760255813599,
+          "mean_ms": 1.3347766315937042,
+          "min_ms": 1.3209919929504395,
+          "p50_ms": 1.3348320126533508,
+          "p90_ms": 1.3374784111976623,
+          "p99_ms": 1.3380256330966949
+        }
+      ],
+      "workload": "mnk_16k4k4k"
+    },
+    {
+      "aggregate": {
+        "max_ms": 2.705024003982544,
+        "mean_ms": 2.6954153633117675,
+        "min_ms": 2.6791040897369385,
+        "p50_ms": 2.697824001312256,
+        "p90_ms": 2.7009471654891968,
+        "p99_ms": 2.702952039241791
+      },
+      "correctness": {
+        "all_finite": true,
+        "max_abs_vs_dequantized_reference": 0.0002441480755805969,
+        "output_abs_max": 0.11962890625,
+        "relative_l2_threshold": 0.005,
+        "relative_l2_vs_dequantized_reference": 0.0016576434718444943
+      },
+      "dense_tflops_at_p50": 407.5549877387048,
+      "k": 4096,
+      "m": 32768,
+      "n": 4096,
+      "repeat_metrics": [
+        {
+          "max_ms": 2.7132160663604736,
+          "mean_ms": 2.606092464923859,
+          "min_ms": 2.3157119750976562,
+          "p50_ms": 2.6686240434646606,
+          "p90_ms": 2.7037248373031617,
+          "p99_ms": 2.712170670032501
+        },
+        {
+          "max_ms": 2.705024003982544,
+          "mean_ms": 2.6954153633117675,
+          "min_ms": 2.6822080612182617,
+          "p50_ms": 2.697824001312256,
+          "p90_ms": 2.7008992195129395,
+          "p99_ms": 2.7027113389968873
+        },
+        {
+          "max_ms": 2.7037439346313477,
+          "mean_ms": 2.697391667366028,
+          "min_ms": 2.6791040897369385,
+          "p50_ms": 2.6978559494018555,
+          "p90_ms": 2.7009471654891968,
+          "p99_ms": 2.702952039241791
+        }
+      ],
+      "workload": "mnk_32k4k4k"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "prequantized kernel-only; allocation, packing, checks, and JIT excluded",
+  "semantic_scale_granularity": "1x32 along reduction K",
+  "timestamp_utc": "2026-08-25T05:07:45.893432+00:00"
+}

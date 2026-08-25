@@ -1,0 +1,179 @@
+{
+  "benchmark": "sonicmoe_sm120_mxfp8_dense_gemm",
+  "config": {
+    "dynamic_persistent": true,
+    "iterations": 100,
+    "pingpong": true,
+    "repeats": 3,
+    "seed": 123,
+    "tile_m": 128,
+    "tile_n": 128,
+    "warmup": 20
+  },
+  "dtype": "OCP MXFP8 E4M3 values + E8M0 scales; BF16 output",
+  "environment": {
+    "driver_version": "595.58.03",
+    "gpu_capability": [
+      12,
+      0
+    ],
+    "gpu_name": "NVIDIA RTX PRO 6000 Blackwell Server Edition",
+    "gpu_total_memory_gib": 94.972412109375,
+    "node_label": "PRO6000",
+    "power.limit": "600.00",
+    "quack_commit": "c87c9d1d100b4a2cc56f90099c0b9001d9ae645e",
+    "sonic_commit": "f0336561d0287eabd4695506826dc98d45650156",
+    "torch_cuda_version": "13.0",
+    "torch_version": "2.13.0+cu130"
+  },
+  "results": [
+    {
+      "aggregate": {
+        "max_ms": 0.37408000230789185,
+        "mean_ms": 0.3489670407772064,
+        "min_ms": 0.3405759930610657,
+        "p50_ms": 0.34887999296188354,
+        "p90_ms": 0.3521600067615509,
+        "p99_ms": 0.35532544702291496
+      },
+      "correctness": {
+        "all_finite": true,
+        "max_abs_vs_dequantized_reference": 0.000244140625,
+        "output_abs_max": 0.12890625,
+        "relative_l2_threshold": 0.005,
+        "relative_l2_vs_dequantized_reference": 0.00165838235989213
+      },
+      "dense_tflops_at_p50": 787.8867017004081,
+      "k": 4096,
+      "m": 8192,
+      "n": 4096,
+      "repeat_metrics": [
+        {
+          "max_ms": 0.39529600739479065,
+          "mean_ms": 0.35330943822860716,
+          "min_ms": 0.33955198526382446,
+          "p50_ms": 0.3586080074310303,
+          "p90_ms": 0.36409918665885926,
+          "p99_ms": 0.36558016240596786
+        },
+        {
+          "max_ms": 0.37244799733161926,
+          "mean_ms": 0.34331999719142914,
+          "min_ms": 0.3405759930610657,
+          "p50_ms": 0.34281599521636963,
+          "p90_ms": 0.3456671953201294,
+          "p99_ms": 0.3461852765083314
+        },
+        {
+          "max_ms": 0.37408000230789185,
+          "mean_ms": 0.3489670407772064,
+          "min_ms": 0.34281599521636963,
+          "p50_ms": 0.34887999296188354,
+          "p90_ms": 0.3521600067615509,
+          "p99_ms": 0.35532544702291496
+        }
+      ],
+      "workload": "mnk_8k4k4k"
+    },
+    {
+      "aggregate": {
+        "max_ms": 0.748416006565094,
+        "mean_ms": 0.7175350451469421,
+        "min_ms": 0.6936320066452026,
+        "p50_ms": 0.7219359874725342,
+        "p90_ms": 0.7276832222938537,
+        "p99_ms": 0.7296115303039552
+      },
+      "correctness": {
+        "all_finite": true,
+        "max_abs_vs_dequantized_reference": 0.000244140625,
+        "output_abs_max": 0.12890625,
+        "relative_l2_threshold": 0.005,
+        "relative_l2_vs_dequantized_reference": 0.001657886547036469
+      },
+      "dense_tflops_at_p50": 761.5021600636238,
+      "k": 4096,
+      "m": 16384,
+      "n": 4096,
+      "repeat_metrics": [
+        {
+          "max_ms": 0.7560960054397583,
+          "mean_ms": 0.6864108818769455,
+          "min_ms": 0.6775040030479431,
+          "p50_ms": 0.6831679940223694,
+          "p90_ms": 0.6876864075660706,
+          "p99_ms": 0.7296115303039552
+        },
+        {
+          "max_ms": 0.7288320064544678,
+          "mean_ms": 0.7175350451469421,
+          "min_ms": 0.6936320066452026,
+          "p50_ms": 0.7219359874725342,
+          "p90_ms": 0.7276832222938537,
+          "p99_ms": 0.72870525598526
+        },
+        {
+          "max_ms": 0.748416006565094,
+          "mean_ms": 0.7272550439834595,
+          "min_ms": 0.724511981010437,
+          "p50_ms": 0.7266720235347748,
+          "p90_ms": 0.7287071764469146,
+          "p99_ms": 0.7319423991441728
+        }
+      ],
+      "workload": "mnk_16k4k4k"
+    },
+    {
+      "aggregate": {
+        "max_ms": 1.4987519979476929,
+        "mean_ms": 1.4824975883960725,
+        "min_ms": 1.4689600467681885,
+        "p50_ms": 1.4813119769096375,
+        "p90_ms": 1.4956159591674805,
+        "p99_ms": 1.4977066016197205
+      },
+      "correctness": {
+        "all_finite": true,
+        "max_abs_vs_dequantized_reference": 0.0003212094306945801,
+        "output_abs_max": 0.1337890625,
+        "relative_l2_threshold": 0.005,
+        "relative_l2_vs_dequantized_reference": 0.0016578424256294966
+      },
+      "dense_tflops_at_p50": 742.2552743209691,
+      "k": 4096,
+      "m": 32768,
+      "n": 4096,
+      "repeat_metrics": [
+        {
+          "max_ms": 1.4915519952774048,
+          "mean_ms": 1.4247606360912324,
+          "min_ms": 1.3687360286712646,
+          "p50_ms": 1.4267520308494568,
+          "p90_ms": 1.4855135560035706,
+          "p99_ms": 1.4915203666687011
+        },
+        {
+          "max_ms": 1.4987519979476929,
+          "mean_ms": 1.4824975883960725,
+          "min_ms": 1.4689600467681885,
+          "p50_ms": 1.4813119769096375,
+          "p90_ms": 1.4956159591674805,
+          "p99_ms": 1.4977066016197205
+        },
+        {
+          "max_ms": 1.5019199848175049,
+          "mean_ms": 1.4938108789920808,
+          "min_ms": 1.4884799718856812,
+          "p50_ms": 1.4935519695281982,
+          "p90_ms": 1.4996832370758058,
+          "p99_ms": 1.5018249809741975
+        }
+      ],
+      "workload": "mnk_32k4k4k"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "prequantized kernel-only; allocation, packing, checks, and JIT excluded",
+  "semantic_scale_granularity": "1x32 along reduction K",
+  "timestamp_utc": "2026-08-25T05:08:46.077825+00:00"
+}

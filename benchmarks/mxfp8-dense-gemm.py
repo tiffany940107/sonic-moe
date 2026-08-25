@@ -14,8 +14,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import socket
 import statistics
 import subprocess
 from datetime import UTC, datetime
@@ -68,7 +66,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--static-persistent", action="store_true")
     parser.add_argument("--skip-correctness", action="store_true")
     parser.add_argument("--seed", type=int, default=123)
-    parser.add_argument("--node-label", default=socket.gethostname())
+    parser.add_argument(
+        "--node-label",
+        default="anonymous",
+        help="public alias stored in results; hostnames are never collected",
+    )
     parser.add_argument(
         "--output", type=Path, help="write the full result document as JSON"
     )
@@ -100,7 +102,9 @@ def _git_commit(path: Path) -> str | None:
 
 
 def _nvidia_smi_metadata(device_uuid: str) -> dict[str, str]:
-    query = "uuid,pci.bus_id,driver_version,power.limit"
+    # The UUID is used only to select the same physical device PyTorch sees. It
+    # is deliberately excluded from the returned, publishable metadata.
+    query = "driver_version,power.limit"
     try:
         line = subprocess.run(
             [
@@ -131,11 +135,9 @@ def _environment(node_label: str) -> dict:
         device_uuid = "GPU-" + device_uuid
     return {
         "node_label": node_label,
-        "hostname": socket.gethostname(),
         "gpu_name": props.name,
         "gpu_capability": list(torch.cuda.get_device_capability(0)),
         "gpu_total_memory_gib": props.total_memory / 2**30,
-        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "torch_version": torch.__version__,
         "torch_cuda_version": torch.version.cuda,
         "sonic_commit": _git_commit(Path(sonicmoe.__file__).resolve().parents[1]),
