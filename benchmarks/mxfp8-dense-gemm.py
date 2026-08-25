@@ -244,6 +244,24 @@ def run_workload(
     output_abs_max = float(out.abs().max())
     if not args.skip_correctness and not all_finite:
         raise AssertionError(f"non-finite output for {name}")
+    relative_l2 = None
+    max_abs = None
+    if not args.skip_correctness:
+        reference = (
+            activation.dequantize(torch.float32) @ weight.dequantize(torch.float32).T
+        )
+        difference = out.float() - reference
+        relative_l2 = float(
+            torch.linalg.vector_norm(difference) / torch.linalg.vector_norm(reference)
+        )
+        max_abs = float(difference.abs().max())
+        if relative_l2 > 0.005:
+            raise AssertionError(
+                f"dense/dequantized-reference correctness failed for {name}: "
+                f"rel_l2={relative_l2}, max_abs={max_abs}"
+            )
+        del difference, reference
+        torch.cuda.empty_cache()
 
     repeats = [
         _benchmark_call(dense_fn, args.warmup, args.iterations)
@@ -262,6 +280,9 @@ def run_workload(
         "correctness": {
             "all_finite": all_finite,
             "output_abs_max": output_abs_max,
+            "relative_l2_vs_dequantized_reference": relative_l2,
+            "max_abs_vs_dequantized_reference": max_abs,
+            "relative_l2_threshold": 0.005,
         },
     }
 
