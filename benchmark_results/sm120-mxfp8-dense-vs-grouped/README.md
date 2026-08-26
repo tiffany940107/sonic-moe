@@ -1,5 +1,7 @@
 # SM120 MXFP8 dense and grouped GEMM comparison
 
+For the PRO5000-only single-GPU scope, timing boundaries, scripts, and a Chinese explanation, see [PRO5000_SINGLE_GPU_RESULTS.md](PRO5000_SINGLE_GPU_RESULTS.md).
+
 All numbers are GPU-event P50 kernel latency. Inputs and weights are already
 quantized as OCP E4M3 plus E8M0 scales with semantic 1x32 granularity along
 K; allocation, quantization, scale packing, checks, and cold JIT are excluded.
