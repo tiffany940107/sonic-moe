@@ -120,6 +120,52 @@ FlashInfer dense MXFP8 API；不能把 E=1 groupwise 的性能直接称为 Flash
   [grouped-vs-dense](pro5000_B_suite_v2/grouped-vs-dense.json)
 - Wrapper 问题与最终重测审计：[AUDIT.md](AUDIT.md)
 
-后续加入 FlashInfer PR #4660 时，应保持相同的单卡、预量化、K32、8 个 balanced
-group、warmup/iterations/repeats 和 CUDA-event 计时边界，再增加 FlashInfer latency
-列；否则不能解释为 kernel 的直接 A/B。
+FlashInfer 旧版与 PR #4660 已按上述约束完成补测，结果见下一节。
+
+## 9. FlashInfer MXFP8 与 Sonic 同粒度单卡对照
+
+FlashInfer 补测使用真正的 per-N-row K32 权重量化，不是把 N32×K32 block scale
+广播成 per-row 后再声称语义对齐。三列均为 8 个 balanced group、预量化
+kernel-only、BF16 输出、20 warmup、100 iterations、3 repeats，并取 repeat
+P50 的中位数。
+
+| 节点 | Workload | Sonic | FlashInfer 旧版 | FlashInfer PR #4660 | PR 相对旧版 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| PRO5000-A | mnk_8k_1280_2k | 0.093264 | 0.098160 | 0.097952 | +0.21% |
+| PRO5000-A | mnk_8k_2k_1280 | 0.098560 | 0.108192 | 0.109344 | −1.06% |
+| PRO5000-A | mnk_16k_1280_2k | 0.189952 | 0.201792 | 0.199792 | +0.99% |
+| PRO5000-A | mnk_16k_2k_1280 | 0.222880 | 0.231040 | 0.232368 | −0.57% |
+| PRO5000-A | mnk_32k_1280_2k | 0.439968 | 0.449568 | 0.450592 | −0.23% |
+| PRO5000-A | mnk_32k_2k_1280 | 0.444048 | 0.465840 | 0.451648 | +3.05% |
+| PRO5000-B | mnk_8k_1280_2k | 0.093776 | 0.097472 | 0.097440 | +0.03% |
+| PRO5000-B | mnk_8k_2k_1280 | 0.098880 | 0.107488 | 0.107488 | +0.00% |
+| PRO5000-B | mnk_16k_1280_2k | 0.188080 | 0.209984 | 0.208032 | +0.93% |
+| PRO5000-B | mnk_16k_2k_1280 | 0.222704 | 0.237680 | 0.238528 | −0.36% |
+| PRO5000-B | mnk_32k_1280_2k | 0.440848 | 0.457856 | 0.458896 | −0.23% |
+| PRO5000-B | mnk_32k_2k_1280 | 0.444960 | 0.475264 | 0.474240 | +0.22% |
+
+正值表示 PR latency 更低。六 shape 几何平均上，PR 相对旧版仅改善
+PRO5000-A 的 0.41% 和 PRO5000-B 的 0.10%，整体属于基本持平。唯一较明显的
+单点是 PRO5000-A 的 mnk_32k_2k_1280（+3.05%），但同一 shape 在
+PRO5000-B 只有 +0.22%，因此不能概括成稳定的 3% 普遍收益。
+两节点单个结果内部的三次 repeat-P50 最大极差分别达到 8.18% 和 8.72%，也说明
+这些小幅新旧差值不能脱离 repeat 波动单独解释。
+
+Sonic 相对 PR #4660 的六 shape 几何平均加速比分别为 1.049x 和 1.068x。
+所有 FlashInfer workload 都通过逐 expert 的反量化 BF16 reference 检查；
+relative L2 约为 3.0e-6 到 4.6e-6。
+
+- [FlashInfer 测试脚本](../../benchmarks/flashinfer-mxfp8-grouped-gemm.py)
+- [机器校验与汇总脚本](../../benchmarks/summarize-flashinfer-sonic-mxfp8-grouped.py)
+- [完整对照表与原始数据链接](FLASHINFER_VS_SONIC.md)
+
+## 10. EP4 多卡系统结果
+
+EP4 是另一组测试，不能与上面的单卡 kernel latency 混为一张性能曲线。它固定
+global tokens 16,384、4,096/rank、top-k 24、hidden 2,560、
+post-SwiGLU intermediate 1,024、768 global experts、EP=4，并包含
+routing/dispatch、NCCL 通信、本地 FC1/FC2、reduce 和 combine。
+
+完整 balanced、Zipf/EPLB、静态权重迁移成本、MegaMoE IBGDA 正确性状态以及
+公开复现脚本见 [EP4 正式记录](ep4/README.md)。主 README 也保留了 balanced
+结果摘要，机器可读汇总见 [ep4/summary.json](ep4/summary.json)。

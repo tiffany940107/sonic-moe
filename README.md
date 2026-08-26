@@ -136,6 +136,13 @@ not implement routing, token permutation, expert-parallel transport, or EPLB.
 Those layers should call the grouped primitive after producing local
 expert-contiguous rows.
 
+The experimental external EP4 wrappers do not change that library boundary.
+Their customer-shape scripts, balanced/imbalance results, topology caveats,
+and MegaMoE IBGDA correctness status are documented in the
+[EP4 system report](benchmark_results/sm120-mxfp8-dense-vs-grouped/ep4/README.md).
+The aligned single-GPU Sonic versus FlashInfer old/PR #4660 results are in
+[the kernel comparison](benchmark_results/sm120-mxfp8-dense-vs-grouped/FLASHINFER_VS_SONIC.md).
+
 ## 🎯 Quick Start
 
 ### Basic Usage

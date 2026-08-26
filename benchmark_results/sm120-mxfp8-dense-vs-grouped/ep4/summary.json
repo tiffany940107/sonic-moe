@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "scope": "historical single-node four-GPU EP4 system measurements",
+  "protocol": {
+    "global_tokens": 16384,
+    "source_tokens_per_rank": 4096,
+    "top_k": 24,
+    "hidden": 2560,
+    "intermediate_after_swiglu": 1024,
+    "global_experts": 768,
+    "local_experts_per_rank": 192,
+    "world_size": 4,
+    "warmup": 20,
+    "iterations": 100,
+    "process_restarts": 3,
+    "reported_statistic": "median of per-restart p50 four-rank critical-path CUDA-event latency"
+  },
+  "implementations": {
+    "flashinfer_fp8_wrapper": {
+      "flashinfer_commit": "05e5d927399d62a2479c430ad3e167738254d760",
+      "value_dtype": "E4M3",
+      "scale": "FP32 groupwise",
+      "scale_granularity": "activation K128; weight 128x128",
+      "multigpu": "external deduplicated Torch/NCCL EP wrapper around a local FlashInfer grouped kernel",
+      "source_quantization_in_timed_region": true
+    },
+    "sonic_mxfp8_wrapper": {
+      "sonic_commit": "7396f3e604827d8186c2e16e64b28ee33d3defd0",
+      "quack_commit": "c8ec3170057987da0ec99883736f381ea1937cf3",
+      "value_dtype": "OCP MXFP8 E4M3",
+      "scale": "E8M0",
+      "scale_granularity": "semantic 1x32 along K",
+      "multigpu": "external deduplicated Torch/NCCL EP wrapper around the Sonic/QuACK grouped kernels",
+      "source_quantization_in_timed_region": true
+    },
+    "megamoe_mxfp8": {
+      "megamoe_commit": "5016d822bd7c20265cef9ade41abd4af783755e5",
+      "value_dtype": "OCP MXFP8 E4M3",
+      "scale": "E8M0",
+      "scale_granularity": "semantic 1x32 along K",
+      "multigpu": "MegaMoE native fused multi-rank runtime",
+      "source_quantization_in_timed_region": false
+    }
+  },
+  "balanced_p50_ms": [
+    {
+      "node": "PRO5000-A",
+      "topology": "same_numa",
+      "flashinfer_fp8_wrapper": 18.621,
+      "sonic_mxfp8_wrapper": 15.746,
+      "megamoe_mxfp8_p2p_direct": 19.719
+    },
+    {
+      "node": "PRO5000-A",
+      "topology": "cross_numa_2plus2",
+      "flashinfer_fp8_wrapper": null,
+      "sonic_mxfp8_wrapper": null,
+      "megamoe_mxfp8_p2p_direct": null,
+      "status": "not_completed"
+    },
+    {
+      "node": "PRO5000-B",
+      "topology": "same_numa",
+      "flashinfer_fp8_wrapper": 18.575,
+      "sonic_mxfp8_wrapper": 15.806,
+      "megamoe_mxfp8_p2p_direct": 19.731
+    },
+    {
+      "node": "PRO5000-B",
+      "topology": "cross_numa_2plus2",
+      "flashinfer_fp8_wrapper": 18.522,
+      "sonic_mxfp8_wrapper": 15.667,
+      "megamoe_mxfp8_p2p_direct": 28.593
+    }
+  ],
+  "imbalance_p50_ms": [
+    {
+      "node": "PRO5000-A",
+      "topology": "same_numa",
+      "flashinfer_zipf_contiguous": 45.236,
+      "flashinfer_zipf_greedy": 18.916,
+      "sonic_zipf_contiguous": 36.282,
+      "sonic_zipf_static_greedy": 16.012,
+      "megamoe_powerlaw_static": 21.501,
+      "megamoe_powerlaw_k2_reclaim": 21.401
+    },
+    {
+      "node": "PRO5000-B",
+      "topology": "same_numa",
+      "flashinfer_zipf_contiguous": 45.579,
+      "flashinfer_zipf_greedy": 18.914,
+      "sonic_zipf_contiguous": 36.422,
+      "sonic_zipf_static_greedy": 16.036,
+      "megamoe_powerlaw_static": 21.509,
+      "megamoe_powerlaw_k2_reclaim": 21.412
+    },
+    {
+      "node": "PRO5000-B",
+      "topology": "cross_numa_2plus2",
+      "flashinfer_zipf_contiguous": 45.477,
+      "flashinfer_zipf_greedy": 18.851,
+      "sonic_zipf_contiguous": 36.456,
+      "sonic_zipf_static_greedy": 15.931,
+      "megamoe_powerlaw_static": 29.775,
+      "megamoe_powerlaw_k2_reclaim": 29.615
+    }
+  ],
+  "imbalance_caveats": {
+    "flashinfer_and_sonic": "same deterministic Zipf routing helper; dtype and scale formats differ",
+    "megamoe": "independent random power-law permutation; absolute imbalance latency is not bit-equivalent to the other traces",
+    "static_greedy_timing": "steady-state forward after placement; one-time planning and weight migration excluded"
+  },
+  "megamoe_ibgda": [
+    {
+      "node": "PRO5000-B",
+      "topology": "cross_numa_2plus2",
+      "code": "before top-k-weight linear-view fix",
+      "balanced_p50_ms": 33.848,
+      "powerlaw_p50_ms": 40.904,
+      "status": "invalid_diagnostic",
+      "reason": "about 83 percent of output elements exceeded the correctness threshold"
+    },
+    {
+      "node": "PRO5000-A",
+      "topology": "cross_numa_2plus2",
+      "code": "after local top-k-weight linear-view fix",
+      "balanced_p50_ms": 33.889,
+      "powerlaw_p50_ms": 40.777,
+      "status": "strict_reduced_token_smoke_passed_full_shape_timing_skipped_reference",
+      "comparison_limit": "no same-window cross-NUMA p2p_direct control on this node"
+    }
+  ]
+}

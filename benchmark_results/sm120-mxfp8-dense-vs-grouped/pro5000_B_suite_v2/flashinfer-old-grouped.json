@@ -1,0 +1,491 @@
+{
+  "benchmark": "flashinfer_sm120_mxfp8_grouped_gemm",
+  "config": {
+    "api_scale_granularity_mnk": [
+      1,
+      1,
+      32
+    ],
+    "distribution": "balanced",
+    "groups": 8,
+    "is_gated": false,
+    "iterations": 100,
+    "repeats": 3,
+    "scale_encoding": "UE8M0",
+    "seed": 123,
+    "warmup": 20
+  },
+  "dtype": "OCP MXFP8 E4M3 values + E8M0 scales; BF16 output",
+  "environment": {
+    "flashinfer_commit": "05e5d927399d62a2479c430ad3e167738254d760",
+    "gpu_capability": [
+      12,
+      0
+    ],
+    "gpu_name": "NVIDIA Graphics Device",
+    "gpu_total_memory_gib": 71.12384033203125,
+    "node_label": "PRO5000-B",
+    "torch_cuda_version": "13.0",
+    "torch_version": "2.13.0+cu130"
+  },
+  "results": [
+    {
+      "aggregate": {
+        "grouped": {
+          "max_ms": 0.10899200290441513,
+          "mean_ms": 0.0981971187889576,
+          "min_ms": 0.09718400239944458,
+          "p50_ms": 0.09747199714183807,
+          "p90_ms": 0.09936319664120674,
+          "p99_ms": 0.10118368253111842
+        }
+      },
+      "correctness": {
+        "activation_qdata_matches_reference": true,
+        "all_finite": true,
+        "checked_elements": 10485760,
+        "checked_groups": 8,
+        "checked_rows": 8192,
+        "cosine_similarity_threshold": 0.99,
+        "cosine_similarity_vs_dequantized_reference": 0.9999999880381509,
+        "max_abs_vs_dequantized_reference": 0.0001220703125,
+        "relative_l2_threshold": 0.02,
+        "relative_l2_vs_dequantized_reference": 4.629030295430955e-06,
+        "status": "passed"
+      },
+      "distribution": "balanced",
+      "group_rows": [
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "grouped_tflops_at_p50": 440.6360207999128,
+      "groups": 8,
+      "k": 2048,
+      "m_total": 8192,
+      "n": 1280,
+      "peak_allocated_gib": 0.2013568878173828,
+      "repeat_metrics": [
+        {
+          "grouped": {
+            "max_ms": 0.11228799819946289,
+            "mean_ms": 0.09786047860980034,
+            "min_ms": 0.09718400239944458,
+            "p50_ms": 0.09743999689817429,
+            "p90_ms": 0.09849599748849869,
+            "p99_ms": 0.10126336276531225
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.10899200290441513,
+            "mean_ms": 0.09874592088162899,
+            "min_ms": 0.09721600264310837,
+            "p50_ms": 0.09916800260543823,
+            "p90_ms": 0.09936319664120674,
+            "p99_ms": 0.10116704232990746
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.1074879989027977,
+            "mean_ms": 0.0981971187889576,
+            "min_ms": 0.09715200215578079,
+            "p50_ms": 0.09747199714183807,
+            "p90_ms": 0.09948799759149551,
+            "p99_ms": 0.10118368253111842
+          }
+        }
+      ],
+      "workload": "mnk_8k_1280_2k"
+    },
+    {
+      "aggregate": {
+        "grouped": {
+          "max_ms": 0.11708799749612808,
+          "mean_ms": 0.1074576000124216,
+          "min_ms": 0.10550399869680405,
+          "p50_ms": 0.1074879989027977,
+          "p90_ms": 0.10771200060844421,
+          "p99_ms": 0.10940031789243226
+        }
+      },
+      "correctness": {
+        "activation_qdata_matches_reference": true,
+        "all_finite": true,
+        "checked_elements": 16777216,
+        "checked_groups": 8,
+        "checked_rows": 8192,
+        "cosine_similarity_threshold": 0.99,
+        "cosine_similarity_vs_dequantized_reference": 1.0,
+        "max_abs_vs_dequantized_reference": 0.000244140625,
+        "relative_l2_threshold": 0.02,
+        "relative_l2_vs_dequantized_reference": 4.446066190646211e-06,
+        "status": "passed"
+      },
+      "distribution": "balanced",
+      "group_rows": [
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024,
+        1024
+      ],
+      "grouped_tflops_at_p50": 399.5764494493916,
+      "groups": 8,
+      "k": 1280,
+      "m_total": 8192,
+      "n": 2048,
+      "peak_allocated_gib": 0.2318434715270996,
+      "repeat_metrics": [
+        {
+          "grouped": {
+            "max_ms": 0.11814399808645248,
+            "mean_ms": 0.10752223953604698,
+            "min_ms": 0.10611200332641602,
+            "p50_ms": 0.1074879989027977,
+            "p90_ms": 0.10771200060844421,
+            "p99_ms": 0.10940031789243226
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.11708799749612808,
+            "mean_ms": 0.1074576000124216,
+            "min_ms": 0.10550399869680405,
+            "p50_ms": 0.10768000036478043,
+            "p90_ms": 0.10774720087647438,
+            "p99_ms": 0.10828095681965355
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.11478400230407715,
+            "mean_ms": 0.10736575961112976,
+            "min_ms": 0.10512000322341919,
+            "p50_ms": 0.10745599865913391,
+            "p90_ms": 0.10771200060844421,
+            "p99_ms": 0.10958847962319854
+          }
+        }
+      ],
+      "workload": "mnk_8k_2k_1280"
+    },
+    {
+      "aggregate": {
+        "grouped": {
+          "max_ms": 0.21359999477863312,
+          "mean_ms": 0.20967776119709014,
+          "min_ms": 0.2059520035982132,
+          "p50_ms": 0.20998400449752808,
+          "p90_ms": 0.21206719875335694,
+          "p99_ms": 0.2126496022939682
+        }
+      },
+      "correctness": {
+        "activation_qdata_matches_reference": true,
+        "all_finite": true,
+        "checked_elements": 20971520,
+        "checked_groups": 8,
+        "checked_rows": 16384,
+        "cosine_similarity_threshold": 0.99,
+        "cosine_similarity_vs_dequantized_reference": 1.0,
+        "max_abs_vs_dequantized_reference": 0.0001220703125,
+        "relative_l2_threshold": 0.02,
+        "relative_l2_vs_dequantized_reference": 3.882758497801954e-06,
+        "status": "passed"
+      },
+      "distribution": "balanced",
+      "group_rows": [
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "grouped_tflops_at_p50": 409.0756632894445,
+      "groups": 8,
+      "k": 2048,
+      "m_total": 16384,
+      "n": 1280,
+      "peak_allocated_gib": 0.3412494659423828,
+      "repeat_metrics": [
+        {
+          "grouped": {
+            "max_ms": 0.2104959934949875,
+            "mean_ms": 0.2018054400384426,
+            "min_ms": 0.19952000677585602,
+            "p50_ms": 0.201664000749588,
+            "p90_ms": 0.20268799364566803,
+            "p99_ms": 0.20447680667042736
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.21359999477863312,
+            "mean_ms": 0.20967776119709014,
+            "min_ms": 0.2059520035982132,
+            "p50_ms": 0.20998400449752808,
+            "p90_ms": 0.21206719875335694,
+            "p99_ms": 0.2126496022939682
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.2239679992198944,
+            "mean_ms": 0.21648063972592355,
+            "min_ms": 0.20982399582862854,
+            "p50_ms": 0.21406400203704834,
+            "p90_ms": 0.2221119999885559,
+            "p99_ms": 0.22285919815301897
+          }
+        }
+      ],
+      "workload": "mnk_16k_1280_2k"
+    },
+    {
+      "aggregate": {
+        "grouped": {
+          "max_ms": 0.24079999327659607,
+          "mean_ms": 0.23765056148171426,
+          "min_ms": 0.22995199263095856,
+          "p50_ms": 0.23768000304698944,
+          "p90_ms": 0.23923200368881226,
+          "p99_ms": 0.2392476835846901
+        }
+      },
+      "correctness": {
+        "activation_qdata_matches_reference": true,
+        "all_finite": true,
+        "checked_elements": 33554432,
+        "checked_groups": 8,
+        "checked_rows": 16384,
+        "cosine_similarity_threshold": 0.99,
+        "cosine_similarity_vs_dequantized_reference": 0.9999999962658621,
+        "max_abs_vs_dequantized_reference": 0.000244140625,
+        "relative_l2_threshold": 0.02,
+        "relative_l2_vs_dequantized_reference": 4.199558296228005e-06,
+        "status": "passed"
+      },
+      "distribution": "balanced",
+      "group_rows": [
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048,
+        2048
+      ],
+      "grouped_tflops_at_p50": 361.4075429939206,
+      "groups": 8,
+      "k": 1280,
+      "m_total": 16384,
+      "n": 2048,
+      "peak_allocated_gib": 0.4017348289489746,
+      "repeat_metrics": [
+        {
+          "grouped": {
+            "max_ms": 0.24079999327659607,
+            "mean_ms": 0.23453088134527206,
+            "min_ms": 0.22864000499248505,
+            "p50_ms": 0.23332799971103668,
+            "p90_ms": 0.23923200368881226,
+            "p99_ms": 0.2392476835846901
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.2412479966878891,
+            "mean_ms": 0.23836224153637886,
+            "min_ms": 0.23270399868488312,
+            "p50_ms": 0.23852799832820892,
+            "p90_ms": 0.23925120383501053,
+            "p99_ms": 0.24061440661549569
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.23977600038051605,
+            "mean_ms": 0.23765056148171426,
+            "min_ms": 0.22995199263095856,
+            "p50_ms": 0.23768000304698944,
+            "p90_ms": 0.23875199258327484,
+            "p99_ms": 0.2392374436557293
+          }
+        }
+      ],
+      "workload": "mnk_16k_2k_1280"
+    },
+    {
+      "aggregate": {
+        "grouped": {
+          "max_ms": 0.47062399983406067,
+          "mean_ms": 0.4593539211153984,
+          "min_ms": 0.447519987821579,
+          "p50_ms": 0.4578559994697571,
+          "p90_ms": 0.46692800223827363,
+          "p99_ms": 0.47062399983406067
+        }
+      },
+      "correctness": {
+        "activation_qdata_matches_reference": true,
+        "all_finite": true,
+        "checked_elements": 41943040,
+        "checked_groups": 8,
+        "checked_rows": 32768,
+        "cosine_similarity_threshold": 0.99,
+        "cosine_similarity_vs_dequantized_reference": 1.0000000059770853,
+        "max_abs_vs_dequantized_reference": 0.000244140625,
+        "relative_l2_threshold": 0.02,
+        "relative_l2_vs_dequantized_reference": 4.614858188565292e-06,
+        "status": "passed"
+      },
+      "distribution": "balanced",
+      "group_rows": [
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "grouped_tflops_at_p50": 375.2242889444717,
+      "groups": 8,
+      "k": 2048,
+      "m_total": 32768,
+      "n": 1280,
+      "peak_allocated_gib": 0.6171283721923828,
+      "repeat_metrics": [
+        {
+          "grouped": {
+            "max_ms": 0.4603840112686157,
+            "mean_ms": 0.4561654391884804,
+            "min_ms": 0.4472639858722687,
+            "p50_ms": 0.45582400262355804,
+            "p90_ms": 0.45836799740791323,
+            "p99_ms": 0.45968703120946885
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.47062399983406067,
+            "mean_ms": 0.4593539211153984,
+            "min_ms": 0.447519987821579,
+            "p50_ms": 0.4578559994697571,
+            "p90_ms": 0.46692800223827363,
+            "p99_ms": 0.47062399983406067
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.4749760031700134,
+            "mean_ms": 0.4700662389397621,
+            "min_ms": 0.4485439956188202,
+            "p50_ms": 0.4700160026550293,
+            "p90_ms": 0.4720959961414337,
+            "p99_ms": 0.4741206440329552
+          }
+        }
+      ],
+      "workload": "mnk_32k_1280_2k"
+    },
+    {
+      "aggregate": {
+        "grouped": {
+          "max_ms": 0.493696004152298,
+          "mean_ms": 0.47745311945676805,
+          "min_ms": 0.469760000705719,
+          "p50_ms": 0.4752639979124069,
+          "p90_ms": 0.4885759949684143,
+          "p99_ms": 0.49315743267536166
+        }
+      },
+      "correctness": {
+        "activation_qdata_matches_reference": true,
+        "all_finite": true,
+        "checked_elements": 67108864,
+        "checked_groups": 8,
+        "checked_rows": 32768,
+        "cosine_similarity_threshold": 0.99,
+        "cosine_similarity_vs_dequantized_reference": 1.0,
+        "max_abs_vs_dequantized_reference": 0.0001220703125,
+        "relative_l2_threshold": 0.02,
+        "relative_l2_vs_dequantized_reference": 3.013915807278498e-06,
+        "status": "passed"
+      },
+      "distribution": "balanced",
+      "group_rows": [
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096,
+        4096
+      ],
+      "grouped_tflops_at_p50": 361.4805510087537,
+      "groups": 8,
+      "k": 1280,
+      "m_total": 32768,
+      "n": 2048,
+      "peak_allocated_gib": 0.7429823875427246,
+      "repeat_metrics": [
+        {
+          "grouped": {
+            "max_ms": 0.4821760058403015,
+            "mean_ms": 0.4740873584151268,
+            "min_ms": 0.469760000705719,
+            "p50_ms": 0.4740000069141388,
+            "p90_ms": 0.47738879919052124,
+            "p99_ms": 0.48201759725809096
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.493696004152298,
+            "mean_ms": 0.47745311945676805,
+            "min_ms": 0.4668799936771393,
+            "p50_ms": 0.4752639979124069,
+            "p90_ms": 0.4885759949684143,
+            "p99_ms": 0.49315743267536166
+          }
+        },
+        {
+          "grouped": {
+            "max_ms": 0.49670401215553284,
+            "mean_ms": 0.49040735960006715,
+            "min_ms": 0.4718720018863678,
+            "p50_ms": 0.4904960095882416,
+            "p90_ms": 0.4944959878921509,
+            "p99_ms": 0.49572193205356596
+          }
+        }
+      ],
+      "workload": "mnk_32k_2k_1280"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "prequantized kernel-only; allocation, quantization, scale packing, dequantized-reference validation, cold JIT, and autotuning excluded",
+  "semantic_scale_granularity": "1x32 along reduction K",
+  "source_validation": {
+    "helper": "tests/grouped_mm/test_cute_sm120_mxfp8.py",
+    "helper_and_imported_package_share_flashinfer_repo": true
+  },
+  "timestamp_utc": "2026-08-26T07:04:30.386641+00:00"
+}

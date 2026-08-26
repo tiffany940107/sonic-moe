@@ -1,6 +1,7 @@
 # SM120 MXFP8 dense and grouped GEMM comparison
 
 For the PRO5000-only single-GPU scope, timing boundaries, scripts, and a Chinese explanation, see [PRO5000_SINGLE_GPU_RESULTS.md](PRO5000_SINGLE_GPU_RESULTS.md).
+The aligned Sonic versus FlashInfer old/PR #4660 table is in [FLASHINFER_VS_SONIC.md](FLASHINFER_VS_SONIC.md). The separate four-GPU EP4 campaign is documented in [ep4/README.md](ep4/README.md).
 
 All numbers are GPU-event P50 kernel latency. Inputs and weights are already
 quantized as OCP E4M3 plus E8M0 scales with semantic 1x32 granularity along
@@ -71,3 +72,18 @@ Every dense output was finite and had relative L2 error <= 0.005 vs a dequantize
 - `PRO6000`: [dense](pro6000_suite_v2/dense.json), [grouped-vs-dense](pro6000_suite_v2/grouped-vs-dense.json)
 - `PRO5000-A`: [dense](pro5000_A_suite_v2/dense.json), [grouped-vs-dense](pro5000_A_suite_v2/grouped-vs-dense.json)
 - `PRO5000-B`: [dense](pro5000_B_suite_v2/dense.json), [grouped-vs-dense](pro5000_B_suite_v2/grouped-vs-dense.json)
+
+## Four-GPU EP4 system result
+
+This is a separate customer-shape campaign: global tokens 16,384, 4,096/rank, top-k 24, hidden 2,560, post-SwiGLU intermediate 1,024, 768 global experts, 192 local experts/rank, and world size 4. Values are the median of three restart P50 four-rank critical-path CUDA-event latencies.
+
+| node | topology | FlashInfer FP8 wrapper | Sonic-MXFP8 wrapper | MegaMoE MXFP8 p2p_direct |
+| --- | --- | ---: | ---: | ---: |
+| PRO5000-A | same NUMA | 18.621 ms | 15.746 ms | 19.719 ms |
+| PRO5000-A | cross NUMA, symmetric 2+2 | — | — | — |
+| PRO5000-B | same NUMA | 18.575 ms | 15.806 ms | 19.731 ms |
+| PRO5000-B | cross NUMA, symmetric 2+2 | 18.522 ms | 15.667 ms | 28.593 ms |
+
+FlashInfer and Sonic use external deduplicated Torch/NCCL EP wrappers around local grouped kernels; MegaMoE uses its own fused multi-rank runtime. FlashInfer is FP8 with FP32 groupwise scales, whereas Sonic and MegaMoE use MXFP8 E4M3 plus E8M0 K32 scales. This is a full-data-path comparison, not a bit-equivalent kernel A/B.
+
+The public Sonic/EPLB entry points are [mxfp8-ep4-e2e.py](../../benchmarks/mxfp8-ep4-e2e.py), [run-mxfp8-ep4-suite.sh](../../benchmarks/run-mxfp8-ep4-suite.sh), and [summarize-mxfp8-ep4-suite.py](../../benchmarks/summarize-mxfp8-ep4-suite.py). The external FlashInfer wrapper is [flashinfer-fp8-ep4-e2e.py](../../benchmarks/flashinfer-fp8-ep4-e2e.py), with [run-flashinfer-fp8-ep4-suite.sh](../../benchmarks/run-flashinfer-fp8-ep4-suite.sh). See the [full EP4 report](ep4/README.md) for imbalance/EPLB, migration cost, IBGDA correctness status, and the anonymous machine-readable result.
