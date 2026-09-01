@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "benchmark": "sonic_mxfp8_segment_edge_sweep",
+  "node_label": "PRO5000-B",
+  "restarts": 3,
+  "shape": {
+    "hidden": 2048,
+    "intermediate_after_swiglu": 1280,
+    "physical_experts": 2,
+    "active_experts": 1,
+    "empty_experts": 1
+  },
+  "scope": "prequantized local FC1+SwiGLU+requant+FC2",
+  "results": [
+    {"segment_m": 1, "median_restart_p50_ms": 0.0405},
+    {"segment_m": 127, "median_restart_p50_ms": 0.0397},
+    {"segment_m": 128, "median_restart_p50_ms": 0.0385},
+    {"segment_m": 129, "median_restart_p50_ms": 0.0391},
+    {"segment_m": 517, "median_restart_p50_ms": 0.0385},
+    {"segment_m": 2528, "median_restart_p50_ms": 0.0973},
+    {"segment_m": 16384, "median_restart_p50_ms": 0.5719}
+  ],
+  "correctness": {
+    "all_bad_count_zero": true,
+    "maximum_output_relative_l2": 0.0016966521507129073
+  }
+}
