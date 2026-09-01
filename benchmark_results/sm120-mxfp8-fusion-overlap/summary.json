@@ -242,7 +242,13 @@
         4083
       ],
       "node_label": "PRO5000-A",
-      "observations": 3,
+      "observations": 4,
+      "resource_gate": {
+        "entrypoint": "scripts/run_cross_numa_formal_campaign.sh",
+        "exit_code": 75,
+        "minimum_observed_top2_free_mib": 4083,
+        "required_free_mib_per_selected_gpu": 60000
+      },
       "result_policy": "No same-NUMA substitution and no latency from the failed attempt.",
       "smallest_attempted_shape": 8192,
       "status": "resource_blocked_external_gpu_memory",
@@ -381,11 +387,17 @@
     {
       "backend": "environment",
       "constrained_group_top2_free_mib": [
-        10289,
-        4285
+        7421,
+        1129
       ],
       "node_label": "PRO5000-B",
-      "observations": 3,
+      "observations": 4,
+      "resource_gate": {
+        "entrypoint": "scripts/run_cross_numa_formal_campaign.sh",
+        "exit_code": 75,
+        "minimum_observed_top2_free_mib": 1129,
+        "required_free_mib_per_selected_gpu": 60000
+      },
       "result_policy": "No same-NUMA substitution and no latency from the failed attempt.",
       "smallest_attempted_shape": 8192,
       "status": "resource_blocked_external_gpu_memory",

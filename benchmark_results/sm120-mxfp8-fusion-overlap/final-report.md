@@ -112,8 +112,12 @@ shared nodes, an unrelated workload occupies the second NUMA GPU group and
 leaves too little memory for even the 8K expert bank. No external process was
 terminated, no same-NUMA value was substituted, and failed-attempt timing is
 not reported. The topology-safe scripts can rerun unchanged once that memory
-is released. Earlier M5 cross-NUMA pipeline numbers are labelled diagnostic,
-not formal matrix results.
+is released. The operational campaign uses a resumable full-matrix runner; the
+public `run-cross-numa-when-ready.sh` applies the same capacity rule and requires
+60,000 MiB free on both selected devices in each NUMA group; the latest gate
+returned 75 after observing only 4,083 MiB on A and 1,129 MiB on B, without
+launching a benchmark. Earlier M5 cross-NUMA pipeline numbers are labelled
+diagnostic, not formal matrix results.
 
 ## Artifacts
 
@@ -126,4 +130,5 @@ not formal matrix results.
 - correctness and timing: `correctness-audit.md` and `timing-levels.md`;
 - exact sources/environment: `sources.json` and `environment.json`;
 - reproducible entry points: `run-formal-ep4.sh`, `run-local-k0-k1.sh`,
-  `parse-megamoe-log.py`, and `audit-summary.py`.
+  `run-cross-numa-when-ready.sh`, `parse-megamoe-log.py`, and
+  `audit-summary.py`.

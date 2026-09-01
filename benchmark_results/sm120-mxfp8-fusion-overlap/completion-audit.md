@@ -56,5 +56,10 @@ expert bank because an unrelated workload occupies the second NUMA GPU group
 on both shared nodes. Both attempts are recorded as
 `resource_blocked_external_gpu_memory`; no process was terminated and no
 same-NUMA result was substituted. The topology-safe scripts are ready to rerun
-unchanged when that external memory is released. This is the only plan item
-without a formal runnable result.
+unchanged when that external memory is released. The operational campaign has
+a resumable locked full-matrix runner; public entry point
+`run-cross-numa-when-ready.sh` applies the same rule that the top two devices in
+each NUMA group have at least 60,000 MiB free and returns 75 without starting a
+benchmark when the resource gate fails. The latest gate observed only 4,083
+MiB on A and 1,129 MiB on B.
+This is the only plan item without a formal runnable result.

@@ -92,6 +92,17 @@ benchmark_results/sm120-mxfp8-fusion-overlap/run-local-k0-k1.sh \
 Both entry points refuse to overwrite an existing result directory and never
 discover/store physical device identifiers.
 
+For cross-NUMA, wrap any launcher with the privacy-safe capacity gate. It
+selects two devices from each NUMA group internally, exports the selection only
+to the child process, and exits 75 without launching when capacity is below the
+threshold:
+
+```bash
+benchmark_results/sm120-mxfp8-fusion-overlap/run-cross-numa-when-ready.sh \
+  60000 benchmark_results/sm120-mxfp8-fusion-overlap/run-formal-ep4.sh \
+  results/cross PRO5000-A cross_numa_2plus2 all
+```
+
 The block-scale old/fixed K=1280 canary and sanitizer A/B is self-contained:
 
 ```bash
@@ -124,6 +135,8 @@ correctness gate before admission.
   `megamoe-p95-p99-reporting.patch`: common-trace adapter and reporting-only diff;
 - `run-formal-ep4.sh`, `run-local-k0-k1.sh`, and
   `run-megamoe-common-trace.sh`: public benchmark entry points;
+- `run-cross-numa-when-ready.sh`: topology selection and fail-closed capacity
+  gate without persisting physical identifiers;
 - `run-blockscale-common-trace.sh`, `bench-blockscale-mxfp8-ep.py`, and
   `moe0902/`: block-scale common-trace entry point and adapter.
 - `run-blockscale-k-tail-ab.sh` plus its Python/CUDA sources: old/fixed
