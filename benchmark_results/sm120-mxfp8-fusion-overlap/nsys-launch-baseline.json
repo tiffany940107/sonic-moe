@@ -1,0 +1,15 @@
+{
+  "cuda_memset_calls": 132,
+  "cuda_memset_calls_per_rank_iteration": 11.0,
+  "driver_allocation_free_calls": 0,
+  "kernel_activity_rows": 948,
+  "kernel_launches_per_rank_iteration": 79.0,
+  "privacy": "aggregate_only_no_machine_or_device_identifiers",
+  "raw_sqlite_sha256": "3926e0912a24d27d5d0ef10d4b00698c227797a615311b04be3aa028798d2298",
+  "runtime_launch_calls": 949,
+  "runtime_launch_calls_per_rank_iteration": 79.08333333333333,
+  "schema_version": 1,
+  "timed_iterations": 3,
+  "variant": "baseline",
+  "world_size": 4
+}

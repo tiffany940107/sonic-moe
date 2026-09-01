@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "node_label": "PRO5000-A",
+  "topology": "same_numa",
+  "workload": {
+    "source_tokens_per_rank": 8192,
+    "top_k": 32,
+    "global_experts": 512,
+    "hidden": 2048,
+    "intermediate_after_swiglu": 1280,
+    "timing_level": "E0_prequantized"
+  },
+  "nsys": {
+    "baseline": {
+      "raw_report_sha256": "d268dacefaf47a595b9630ec1a2a7b3a4478c39a022ae15187bb31453a3c0398",
+      "kernel_time_percent": {
+        "nccl_sendrecv": 22.9,
+        "fc1_swiglu_requant": 19.6,
+        "fp32_index_add": 17.3,
+        "weight_multiply": 12.4,
+        "fc2": 10.0
+      },
+      "average_ms": {
+        "fc1_swiglu_requant": 6.1060512,
+        "fp32_index_add": 5.397067,
+        "fc2": 3.1140803
+      }
+    },
+    "fused_segmented": {
+      "raw_report_sha256": "ccc0bdd4acb5d2f4f53ababb78314ba5ba24cf27608832ae095a712585574fa4",
+      "kernel_time_percent": {
+        "nccl_sendrecv": 36.2,
+        "fc1_swiglu_requant": 31.5,
+        "fc2": 16.1,
+        "segmented_weighted_reduce": 5.4,
+        "route_qdata_gather": 5.2
+      },
+      "average_ms": {
+        "fc1_swiglu_requant": 6.1035257,
+        "fc2": 3.1222403,
+        "segmented_weighted_reduce": 1.0535991,
+        "route_qdata_gather": 1.0123324,
+        "route_scale_gather": 0.1797285
+      }
+    },
+    "steady_state_launch_audit": {
+      "timed_iterations": 3,
+      "world_size": 4,
+      "baseline": {
+        "kernel_launches_per_rank_iteration": 79.0,
+        "cuda_memset_calls_per_rank_iteration": 11.0,
+        "driver_allocation_free_calls": 0
+      },
+      "fused_pre_transport_workspace": {
+        "kernel_launches_per_rank_iteration": 32.0,
+        "cuda_memset_calls_per_rank_iteration": 0.0,
+        "driver_allocation_free_calls": 0
+      },
+      "fused_transport_workspace": {
+        "kernel_launches_per_rank_iteration": 21.0,
+        "cuda_memset_calls_per_rank_iteration": 0.0,
+        "driver_allocation_free_calls": 0
+      },
+      "raw_reports_public": false,
+      "aggregate_files": [
+        "nsys_launch_baseline.json",
+        "nsys_launch_fused_pre_transport_workspace.json",
+        "nsys_launch_fused_transport_workspace.json"
+      ]
+    }
+  },
+  "ncu_segmented_weighted_reduce": {
+    "raw_csv_sha256": "7f9719589f8705a9cdaa3636d62c3247e65132638763516c5232d2919fbc5662",
+    "instrumented_duration_ms": 1.351264,
+    "dram_percent_peak": 71.72,
+    "sm_percent_peak": 83.57,
+    "active_warps_percent_peak": 78.92,
+    "registers_per_thread": 42
+  },
+  "publication": {
+    "raw_profiler_files_included": false,
+    "reason": "Raw NSYS/NCU artifacts contain machine and device identifiers; only aggregate metrics and hashes are publishable."
+  }
+}

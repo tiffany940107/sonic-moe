@@ -1,4 +1,230 @@
 {
+  "local_timing_results": [
+    {
+      "all_correct": true,
+      "benchmark": "sonic_mxfp8_workspace_cuda_graph_k0",
+      "max_peak_allocated_bytes": 10529396224,
+      "max_peak_reserved_bytes": 11075059712,
+      "max_timed_allocator_delta": {},
+      "median_graph_speedup": 1.0001664654419773,
+      "modes": {
+        "cuda_graph": {
+          "median_restart_p50_ms": 10.559807777404785,
+          "median_restart_p95_ms": 10.572283363342285,
+          "median_restart_p99_ms": 10.578324451446534,
+          "restart_p50_ms": [
+            10.551488399505615,
+            10.559807777404785,
+            10.569936275482178
+          ],
+          "restart_p95_ms": [
+            10.564403247833251,
+            10.572283363342285,
+            10.58607530593872
+          ],
+          "restart_p99_ms": [
+            10.570125341415405,
+            10.578324451446534,
+            10.590944604873657
+          ]
+        },
+        "eager": {
+          "median_restart_p50_ms": 10.561568260192871,
+          "median_restart_p95_ms": 10.580138921737671,
+          "median_restart_p99_ms": 10.584376926422118,
+          "restart_p50_ms": [
+            10.545087814331055,
+            10.561568260192871,
+            10.571695804595947
+          ],
+          "restart_p95_ms": [
+            10.564163112640381,
+            10.580138921737671,
+            10.587152242660522
+          ],
+          "restart_p99_ms": [
+            10.567332830429077,
+            10.584376926422118,
+            10.59059814453125
+          ]
+        }
+      },
+      "node_label": "PRO5000-A",
+      "quack_commit": "d38dd360555bd4b2a8b35fd78a6c6b5e5ebfd0de",
+      "restarts": 3,
+      "shape": {
+        "experts": 128,
+        "hidden": 2048,
+        "intermediate": 1280,
+        "rows": 262144
+      },
+      "sonic_commit": "685dbd46d116840480d45a9d8288375805e3f737",
+      "timing_level": "K0_native_layout_preallocated_local_mlp"
+    },
+    {
+      "all_correct": true,
+      "benchmark": "sonic_mxfp8_k1_local_route_compute_reduce",
+      "max_peak_allocated_bytes": 3702381568,
+      "max_peak_reserved_bytes": 6954156032,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_graph_speedup": null,
+      "modes": {
+        "latency": {
+          "median_restart_p50_ms": 12.792815685272217,
+          "median_restart_p95_ms": 12.812722873687743,
+          "median_restart_p99_ms": 12.821736268997192,
+          "restart_p50_ms": [
+            12.792815685272217,
+            12.795504093170166,
+            12.78598403930664
+          ],
+          "restart_p95_ms": [
+            12.812722873687743,
+            12.82036600112915,
+            12.810950708389282
+          ],
+          "restart_p99_ms": [
+            12.821736268997192,
+            12.827393550872802,
+            12.818480920791625
+          ]
+        }
+      },
+      "node_label": "PRO5000-A",
+      "quack_commit": "d38dd360555bd4b2a8b35fd78a6c6b5e5ebfd0de",
+      "restarts": 3,
+      "shape": {
+        "experts": 128,
+        "hidden": 2048,
+        "intermediate": 1280,
+        "local_routes_per_token": 8,
+        "recv_tokens": 32768,
+        "routed_pairs": 262144,
+        "top_k": 32
+      },
+      "sonic_commit": "685dbd46d116840480d45a9d8288375805e3f737",
+      "timing_level": "K1_row_linear_mxfp8_route_to_local_reduced_output"
+    },
+    {
+      "all_correct": true,
+      "benchmark": "sonic_mxfp8_workspace_cuda_graph_k0",
+      "max_peak_allocated_bytes": 10529396224,
+      "max_peak_reserved_bytes": 11075059712,
+      "max_timed_allocator_delta": {},
+      "median_graph_speedup": 0.9997120060149357,
+      "modes": {
+        "cuda_graph": {
+          "median_restart_p50_ms": 10.633855819702148,
+          "median_restart_p95_ms": 10.659009742736817,
+          "median_restart_p99_ms": 10.663745574951172,
+          "restart_p50_ms": [
+            10.611504077911377,
+            10.633855819702148,
+            10.64635181427002
+          ],
+          "restart_p95_ms": [
+            10.633296298980714,
+            10.659009742736817,
+            10.667347192764282
+          ],
+          "restart_p99_ms": [
+            10.639476594924927,
+            10.663745574951172,
+            10.673610439300537
+          ]
+        },
+        "eager": {
+          "median_restart_p50_ms": 10.627376079559326,
+          "median_restart_p95_ms": 10.658978939056396,
+          "median_restart_p99_ms": 10.665664043426514,
+          "restart_p50_ms": [
+            10.608448028564453,
+            10.627376079559326,
+            10.643392086029053
+          ],
+          "restart_p95_ms": [
+            10.633085012435913,
+            10.658978939056396,
+            10.667052698135375
+          ],
+          "restart_p99_ms": [
+            10.636988916397096,
+            10.665664043426514,
+            10.67712073326111
+          ]
+        }
+      },
+      "node_label": "PRO5000-B",
+      "quack_commit": "d38dd360555bd4b2a8b35fd78a6c6b5e5ebfd0de",
+      "restarts": 3,
+      "shape": {
+        "experts": 128,
+        "hidden": 2048,
+        "intermediate": 1280,
+        "rows": 262144
+      },
+      "sonic_commit": "685dbd46d116840480d45a9d8288375805e3f737",
+      "timing_level": "K0_native_layout_preallocated_local_mlp"
+    },
+    {
+      "all_correct": true,
+      "benchmark": "sonic_mxfp8_k1_local_route_compute_reduce",
+      "max_peak_allocated_bytes": 3702381568,
+      "max_peak_reserved_bytes": 6954156032,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_graph_speedup": null,
+      "modes": {
+        "latency": {
+          "median_restart_p50_ms": 12.884671688079834,
+          "median_restart_p95_ms": 12.907358169555664,
+          "median_restart_p99_ms": 12.95183165550232,
+          "restart_p50_ms": [
+            12.884671688079834,
+            12.87443208694458,
+            12.896368026733398
+          ],
+          "restart_p95_ms": [
+            12.907358169555664,
+            12.902694034576417,
+            12.918752241134644
+          ],
+          "restart_p99_ms": [
+            12.95183165550232,
+            12.90621485710144,
+            12.969585628509522
+          ]
+        }
+      },
+      "node_label": "PRO5000-B",
+      "quack_commit": "d38dd360555bd4b2a8b35fd78a6c6b5e5ebfd0de",
+      "restarts": 3,
+      "shape": {
+        "experts": 128,
+        "hidden": 2048,
+        "intermediate": 1280,
+        "local_routes_per_token": 8,
+        "recv_tokens": 32768,
+        "routed_pairs": 262144,
+        "top_k": 32
+      },
+      "sonic_commit": "685dbd46d116840480d45a9d8288375805e3f737",
+      "timing_level": "K1_row_linear_mxfp8_route_to_local_reduced_output"
+    }
+  ],
   "protocol": {
     "center": "median of restart p50 values",
     "independent_restarts": 3,
@@ -33,6 +259,18 @@
       "status": "invalid_c4_bad_count",
       "topology": "same_numa",
       "trace": "m16384_joint_aligned_max"
+    },
+    {
+      "backend": "blockscale_groupwise",
+      "bad_count": 9,
+      "max_abs": 256.0,
+      "node_label": "PRO5000-A",
+      "relative_l2": 1.2757101103488822e-05,
+      "restart": 1,
+      "source_tokens_per_rank": 16384,
+      "status": "invalid_c4_bad_elements",
+      "topology": "same_numa",
+      "trace": "m16384_persistent_single_hot"
     },
     {
       "backend": "blockscale_groupwise",
@@ -231,10 +469,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 10394195456,
+      "max_peak_reserved_bytes": 13423869952,
       "max_relative_l2": 1.3731490980717354e-05,
       "max_restart_p50_ms": 26.0993595123291,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 26.082463264465332,
+      "median_restart_p95_ms": 26.230534839630124,
+      "median_restart_p99_ms": 26.724357795715342,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 26.073759078979492,
       "node_label": "PRO5000-A",
@@ -242,6 +486,16 @@
         26.073759078979492,
         26.0993595123291,
         26.082463264465332
+      ],
+      "restart_p95_ms": [
+        26.181228256225587,
+        26.230534839630124,
+        26.254445266723636
+      ],
+      "restart_p99_ms": [
+        27.08311702728272,
+        26.724357795715342,
+        26.302665538787842
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -255,10 +509,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 19750245888,
+      "max_peak_reserved_bytes": 20923285504,
       "max_relative_l2": 1.3689729712496046e-05,
       "max_restart_p50_ms": 51.9384651184082,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 51.93844795227051,
+      "median_restart_p95_ms": 52.16391716003418,
+      "median_restart_p99_ms": 53.20504871368408,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 51.91438293457031,
       "node_label": "PRO5000-A",
@@ -266,6 +526,16 @@
         51.91438293457031,
         51.9384651184082,
         51.93844795227051
+      ],
+      "restart_p95_ms": [
+        52.30820007324219,
+        52.087148094177245,
+        52.16391716003418
+      ],
+      "restart_p99_ms": [
+        54.74276058197022,
+        53.20504871368408,
+        53.00568523406983
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -279,10 +549,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 21718090240,
+      "max_peak_reserved_bytes": 24008196096,
       "max_relative_l2": 1.3057535397820175e-05,
       "max_restart_p50_ms": 57.49881553649902,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 57.44857597351074,
+      "median_restart_p95_ms": 57.62645664215088,
+      "median_restart_p99_ms": 57.727936058044435,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 57.4148006439209,
       "node_label": "PRO5000-A",
@@ -290,6 +566,16 @@
         57.4148006439209,
         57.44857597351074,
         57.49881553649902
+      ],
+      "restart_p95_ms": [
+        57.58249702453614,
+        57.64835758209229,
+        57.62645664215088
+      ],
+      "restart_p99_ms": [
+        57.643846855163574,
+        57.727936058044435,
+        57.81511810302735
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -303,10 +589,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 23958041600,
+      "max_peak_reserved_bytes": 25987907584,
       "max_relative_l2": 1.2927909665449988e-05,
       "max_restart_p50_ms": 63.80097579956055,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 63.76615905761719,
+      "median_restart_p95_ms": 64.01103477478027,
+      "median_restart_p99_ms": 64.1621883392334,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 63.71545600891113,
       "node_label": "PRO5000-A",
@@ -314,6 +606,16 @@
         63.76615905761719,
         63.71545600891113,
         63.80097579956055
+      ],
+      "restart_p95_ms": [
+        64.01103477478027,
+        63.962957572937015,
+        64.08461990356444
+      ],
+      "restart_p99_ms": [
+        64.12513893127442,
+        64.18101783752442,
+        64.1621883392334
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -327,10 +629,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 32691643904,
+      "max_peak_reserved_bytes": 36003905536,
       "max_relative_l2": 1.3727324585488532e-05,
       "max_restart_p50_ms": 88.55567932128906,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 88.4978256225586,
+      "median_restart_p95_ms": 88.86252250671387,
+      "median_restart_p99_ms": 89.08682861328124,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 88.4686393737793,
       "node_label": "PRO5000-A",
@@ -338,6 +646,16 @@
         88.4686393737793,
         88.55567932128906,
         88.4978256225586
+      ],
+      "restart_p95_ms": [
+        88.86252250671387,
+        89.01240539550781,
+        88.84731483459473
+      ],
+      "restart_p99_ms": [
+        89.08682861328124,
+        89.11937355041503,
+        88.91315864562989
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -351,10 +669,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 38462346752,
+      "max_peak_reserved_bytes": 40745566208,
       "max_relative_l2": 1.2691543815890327e-05,
       "max_restart_p50_ms": 109.55532836914062,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 109.39868545532227,
+      "median_restart_p95_ms": 109.85288581848144,
+      "median_restart_p99_ms": 110.65002326965333,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 109.20102310180664,
       "node_label": "PRO5000-A",
@@ -362,6 +686,16 @@
         109.20102310180664,
         109.39868545532227,
         109.55532836914062
+      ],
+      "restart_p95_ms": [
+        109.59654541015625,
+        109.85288581848144,
+        110.17882423400879
+      ],
+      "restart_p99_ms": [
+        109.77660514831544,
+        110.75586822509766,
+        110.65002326965333
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -375,10 +709,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 53667042816,
+      "max_peak_reserved_bytes": 59213086720,
       "max_relative_l2": 1.2518216863099951e-05,
       "max_restart_p50_ms": 156.0792694091797,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 156.007568359375,
+      "median_restart_p95_ms": 156.5456726074219,
+      "median_restart_p99_ms": 156.77292556762694,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 155.865234375,
       "node_label": "PRO5000-A",
@@ -386,6 +726,16 @@
         155.865234375,
         156.007568359375,
         156.0792694091797
+      ],
+      "restart_p95_ms": [
+        156.43002548217774,
+        156.5456726074219,
+        156.76684875488283
+      ],
+      "restart_p99_ms": [
+        156.67482376098633,
+        156.77292556762694,
+        157.0895100402832
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -399,10 +749,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 43.35042,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 43.31322,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 43.299330000000005,
       "node_label": "PRO5000-A",
@@ -411,6 +767,8 @@
         43.31322,
         43.299330000000005
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
       "timing_level": "native_E0_prequantized",
@@ -423,10 +781,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 85.93742,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 85.93282,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 85.92608,
       "node_label": "PRO5000-A",
@@ -435,6 +799,8 @@
         85.92608,
         85.93742
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -445,12 +811,98 @@
     },
     {
       "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 43.322160000000004,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 43.30125,
+      "median_restart_p95_ms": 43.63563,
+      "median_restart_p99_ms": 43.74018,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 43.28557,
+      "node_label": "PRO5000-A",
+      "restart_p50_ms": [
+        43.322160000000004,
+        43.30125,
+        43.28557
+      ],
+      "restart_p95_ms": [
+        43.63563,
+        43.69382,
+        43.586760000000005
+      ],
+      "restart_p99_ms": [
+        43.74018,
+        43.83039,
+        43.688050000000004
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 8192,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m8192_balanced",
+      "trace_sha256": "54ca9b5a5929b6fd8d7738fc7f1b9c7e59d907be46947d41d74116a42629e2e4",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 85.94653,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 85.93082000000001,
+      "median_restart_p95_ms": 86.2085,
+      "median_restart_p99_ms": 86.36887,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 85.90264,
+      "node_label": "PRO5000-A",
+      "restart_p50_ms": [
+        85.94653,
+        85.93082000000001,
+        85.90264
+      ],
+      "restart_p95_ms": [
+        86.22371000000001,
+        86.2085,
+        86.16857
+      ],
+      "restart_p99_ms": [
+        86.36887,
+        86.43139,
+        86.29927
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_balanced",
+      "trace_sha256": "100453edcee8eb0735a6fa72725554c089420e607c4a3c20310900267a0eabf0",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 8554087936,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 23.270048141479492,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 23.269023895263672,
+      "median_restart_p95_ms": 23.34116268157959,
+      "median_restart_p99_ms": 23.5215517616272,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 23.24240016937256,
       "node_label": "PRO5000-A",
@@ -458,6 +910,16 @@
         23.24240016937256,
         23.269023895263672,
         23.270048141479492
+      ],
+      "restart_p95_ms": [
+        23.46317481994629,
+        23.34116268157959,
+        23.33350534439087
+      ],
+      "restart_p99_ms": [
+        25.089214801788334,
+        23.5215517616272,
+        23.479895267486583
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -471,10 +933,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 9328942080,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 27.864192008972168,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 27.857568740844727,
+      "median_restart_p95_ms": 27.89284439086914,
+      "median_restart_p99_ms": 27.96945463180542,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 27.850879669189453,
       "node_label": "PRO5000-A",
@@ -482,6 +950,16 @@
         27.850879669189453,
         27.857568740844727,
         27.864192008972168
+      ],
+      "restart_p95_ms": [
+        27.890437507629397,
+        27.89284439086914,
+        27.898600578308105
+      ],
+      "restart_p99_ms": [
+        27.968059692382816,
+        28.04705945968628,
+        27.96945463180542
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -495,10 +973,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16663838208,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 55.3171501159668,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 55.317134857177734,
+      "median_restart_p95_ms": 55.35918426513672,
+      "median_restart_p99_ms": 55.38138648986816,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 55.28335952758789,
       "node_label": "PRO5000-A",
@@ -506,6 +990,16 @@
         55.28335952758789,
         55.3171501159668,
         55.317134857177734
+      ],
+      "restart_p95_ms": [
+        55.34587478637695,
+        55.35918426513672,
+        55.38094539642334
+      ],
+      "restart_p99_ms": [
+        55.38138648986816,
+        55.37426921844482,
+        55.46616535186768
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -519,10 +1013,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 14726205440,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 46.68684768676758,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 46.64896011352539,
+      "median_restart_p95_ms": 46.776808166503905,
+      "median_restart_p99_ms": 47.087293319702155,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 46.620304107666016,
       "node_label": "PRO5000-A",
@@ -530,6 +1030,16 @@
         46.64896011352539,
         46.620304107666016,
         46.68684768676758
+      ],
+      "restart_p95_ms": [
+        46.776808166503905,
+        46.737022399902344,
+        46.84462890625
+      ],
+      "restart_p99_ms": [
+        47.087293319702155,
+        46.780309410095214,
+        47.112619171142576
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -543,10 +1053,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 23577509888,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 84.74892807006836,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 84.74793243408203,
+      "median_restart_p95_ms": 84.87107505798339,
+      "median_restart_p99_ms": 84.93485176086425,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 84.7182388305664,
       "node_label": "PRO5000-A",
@@ -554,6 +1070,16 @@
         84.7182388305664,
         84.74793243408203,
         84.74892807006836
+      ],
+      "restart_p95_ms": [
+        84.83236236572266,
+        84.95979919433593,
+        84.87107505798339
+      ],
+      "restart_p99_ms": [
+        84.93485176086425,
+        85.41277023315429,
+        84.91861335754395
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -567,10 +1093,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16077803008,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 50.99379348754883,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 50.972286224365234,
+      "median_restart_p95_ms": 51.02792186737061,
+      "median_restart_p99_ms": 51.17036167144776,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 50.93849563598633,
       "node_label": "PRO5000-A",
@@ -578,6 +1110,16 @@
         50.93849563598633,
         50.972286224365234,
         50.99379348754883
+      ],
+      "restart_p95_ms": [
+        50.981046485900876,
+        51.02792186737061,
+        51.065778923034664
+      ],
+      "restart_p99_ms": [
+        52.94012893676759,
+        51.127199020385746,
+        51.17036167144776
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -591,10 +1133,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 17618812928,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 56.663185119628906,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 56.64780807495117,
+      "median_restart_p95_ms": 56.74129772186279,
+      "median_restart_p99_ms": 56.81455715179444,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 56.64681625366211,
       "node_label": "PRO5000-A",
@@ -602,6 +1150,16 @@
         56.64681625366211,
         56.64780807495117,
         56.663185119628906
+      ],
+      "restart_p95_ms": [
+        56.738565063476564,
+        56.81318454742432,
+        56.74129772186279
+      ],
+      "restart_p99_ms": [
+        56.80040466308594,
+        57.358321075439456,
+        56.81455715179444
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -615,10 +1173,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 23618603008,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 80.22697448730469,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 80.19265365600586,
+      "median_restart_p95_ms": 80.41769828796387,
+      "median_restart_p99_ms": 80.47283546447754,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 80.17320251464844,
       "node_label": "PRO5000-A",
@@ -626,6 +1190,16 @@
         80.17320251464844,
         80.22697448730469,
         80.19265365600586
+      ],
+      "restart_p95_ms": [
+        80.32668075561523,
+        80.42020378112792,
+        80.41769828796387
+      ],
+      "restart_p99_ms": [
+        80.35174362182617,
+        80.93073158264161,
+        80.47283546447754
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -639,10 +1213,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 32287352832,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 122.11982345581055,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 122.02870178222656,
+      "median_restart_p95_ms": 122.17933235168458,
+      "median_restart_p99_ms": 122.20854614257813,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 121.95699310302734,
       "node_label": "PRO5000-A",
@@ -650,6 +1230,16 @@
         121.95699310302734,
         122.02870178222656,
         122.11982345581055
+      ],
+      "restart_p95_ms": [
+        122.06656036376954,
+        122.17933235168458,
+        122.44020042419433
+      ],
+      "restart_p99_ms": [
+        122.09531478881836,
+        122.20854614257813,
+        122.82839294433595
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -663,10 +1253,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16140863488,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 57.16903877258301,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 57.14704132080078,
+      "median_restart_p95_ms": 57.24434204101563,
+      "median_restart_p99_ms": 57.33457492828369,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 57.11272048950195,
       "node_label": "PRO5000-A",
@@ -674,6 +1270,16 @@
         57.16903877258301,
         57.14704132080078,
         57.11272048950195
+      ],
+      "restart_p95_ms": [
+        57.24434204101563,
+        57.247542762756346,
+        57.21710128784179
+      ],
+      "restart_p99_ms": [
+        57.502745628356934,
+        57.33457492828369,
+        57.263936309814454
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -687,10 +1293,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 28410515456,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 104.18342590332031,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 104.11124801635742,
+      "median_restart_p95_ms": 104.29927215576171,
+      "median_restart_p99_ms": 104.6767667388916,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 104.06364822387695,
       "node_label": "PRO5000-A",
@@ -698,6 +1310,16 @@
         104.06364822387695,
         104.11124801635742,
         104.18342590332031
+      ],
+      "restart_p95_ms": [
+        104.28510513305665,
+        104.29927215576171,
+        104.35205993652343
+      ],
+      "restart_p99_ms": [
+        104.73518737792969,
+        104.6767667388916,
+        104.43095550537109
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -711,10 +1333,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 34195606016,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 125.35156631469727,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 125.32289505004883,
+      "median_restart_p95_ms": 125.50827713012696,
+      "median_restart_p99_ms": 125.53704933166503,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 125.26708984375,
       "node_label": "PRO5000-A",
@@ -722,6 +1350,16 @@
         125.26708984375,
         125.32289505004883,
         125.35156631469727
+      ],
+      "restart_p95_ms": [
+        125.45229148864746,
+        125.50827713012696,
+        125.53754081726075
+      ],
+      "restart_p99_ms": [
+        125.52310333251953,
+        125.53704933166503,
+        125.80467254638673
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -735,10 +1373,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 63537611776,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 248.30429077148438,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 248.16502380371094,
+      "median_restart_p95_ms": 248.51354217529297,
+      "median_restart_p99_ms": 248.5791194152832,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 247.87316131591797,
       "node_label": "PRO5000-A",
@@ -746,6 +1390,16 @@
         247.87316131591797,
         248.16502380371094,
         248.30429077148438
+      ],
+      "restart_p95_ms": [
+        248.2576988220215,
+        248.51354217529297,
+        248.57103805541993
+      ],
+      "restart_p99_ms": [
+        248.33656158447266,
+        248.5791194152832,
+        248.59644775390626
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -759,10 +1413,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 39533211648,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 6.113631911830453e-08,
       "max_restart_p50_ms": 147.1765899658203,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 147.1714859008789,
+      "median_restart_p95_ms": 147.3723907470703,
+      "median_restart_p99_ms": 147.47781311035155,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 147.11721801757812,
       "node_label": "PRO5000-A",
@@ -770,6 +1430,16 @@
         147.11721801757812,
         147.1714859008789,
         147.1765899658203
+      ],
+      "restart_p95_ms": [
+        147.33475875854492,
+        147.3723907470703,
+        147.40582885742188
+      ],
+      "restart_p99_ms": [
+        147.53270614624023,
+        147.47781311035155,
+        147.47448471069336
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -783,10 +1453,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 47665906176,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.442984907702339e-07,
       "max_restart_p50_ms": 177.33646392822266,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 177.18694305419922,
+      "median_restart_p95_ms": 177.43135147094725,
+      "median_restart_p99_ms": 177.4931576538086,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 176.86544036865234,
       "node_label": "PRO5000-A",
@@ -794,6 +1470,16 @@
         176.86544036865234,
         177.18694305419922,
         177.33646392822266
+      ],
+      "restart_p95_ms": [
+        177.1110969543457,
+        177.43135147094725,
+        177.52765579223632
+      ],
+      "restart_p99_ms": [
+        177.20002426147462,
+        177.4931576538086,
+        177.5717738342285
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -807,10 +1493,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 8554087936,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.701210541999899e-05,
       "max_restart_p50_ms": 13.206496238708496,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 13.149503707885742,
+      "median_restart_p95_ms": 13.229301261901856,
+      "median_restart_p99_ms": 13.27278476715088,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 13.109551906585693,
       "node_label": "PRO5000-A",
@@ -818,6 +1510,16 @@
         13.206496238708496,
         13.149503707885742,
         13.109551906585693
+      ],
+      "restart_p95_ms": [
+        13.270784139633179,
+        13.229301261901856,
+        13.225593709945679
+      ],
+      "restart_p99_ms": [
+        13.297223348617553,
+        13.244728994369508,
+        13.27278476715088
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -831,10 +1533,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 8535737856,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.5781506337807514e-05,
       "max_restart_p50_ms": 13.083903789520264,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 13.07865571975708,
+      "median_restart_p95_ms": 13.157308864593505,
+      "median_restart_p99_ms": 13.180455045700073,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 13.066480159759521,
       "node_label": "PRO5000-A",
@@ -842,6 +1550,16 @@
         13.066480159759521,
         13.07865571975708,
         13.083903789520264
+      ],
+      "restart_p95_ms": [
+        13.157308864593505,
+        13.147370910644531,
+        13.15977602005005
+      ],
+      "restart_p99_ms": [
+        13.179181394577027,
+        13.180455045700073,
+        13.188265542984007
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -855,10 +1573,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 9271703040,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.6650250219972804e-05,
       "max_restart_p50_ms": 15.9203200340271,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 15.89419174194336,
+      "median_restart_p95_ms": 15.965211391448975,
+      "median_restart_p99_ms": 15.987074642181396,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 15.865344047546387,
       "node_label": "PRO5000-A",
@@ -866,6 +1590,16 @@
         15.865344047546387,
         15.89419174194336,
         15.9203200340271
+      ],
+      "restart_p95_ms": [
+        15.942623805999755,
+        15.965211391448975,
+        15.977239656448365
+      ],
+      "restart_p99_ms": [
+        15.950688247680663,
+        15.987074642181396,
+        16.002978439331056
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -879,10 +1613,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 13017008128,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.665750616870355e-05,
       "max_restart_p50_ms": 31.289104461669922,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 31.26838493347168,
+      "median_restart_p95_ms": 31.404167556762697,
+      "median_restart_p99_ms": 31.42913871765137,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 31.261216163635254,
       "node_label": "PRO5000-A",
@@ -890,6 +1630,16 @@
         31.261216163635254,
         31.26838493347168,
         31.289104461669922
+      ],
+      "restart_p95_ms": [
+        31.394848060607913,
+        31.404167556762697,
+        31.426283264160155
+      ],
+      "restart_p99_ms": [
+        31.42913871765137,
+        31.428973712921145,
+        31.441072273254395
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -903,10 +1653,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 11772364288,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.424898775643669e-05,
       "max_restart_p50_ms": 26.031824111938477,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 26.00096035003662,
+      "median_restart_p95_ms": 26.3229567527771,
+      "median_restart_p99_ms": 26.377762031555175,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 25.99836826324463,
       "node_label": "PRO5000-A",
@@ -914,6 +1670,16 @@
         26.00096035003662,
         26.031824111938477,
         25.99836826324463
+      ],
+      "restart_p95_ms": [
+        26.3229567527771,
+        26.334091567993163,
+        26.206460094451906
+      ],
+      "restart_p99_ms": [
+        26.377762031555175,
+        26.398078365325926,
+        26.299814987182618
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -927,10 +1693,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16460648448,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.548963311710395e-05,
       "max_restart_p50_ms": 46.41267204284668,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 46.41076850891113,
+      "median_restart_p95_ms": 46.6801685333252,
+      "median_restart_p99_ms": 46.74960060119629,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 46.40313529968262,
       "node_label": "PRO5000-A",
@@ -938,6 +1710,16 @@
         46.41267204284668,
         46.40313529968262,
         46.41076850891113
+      ],
+      "restart_p95_ms": [
+        46.679563331604,
+        46.6801685333252,
+        46.720359802246094
+      ],
+      "restart_p99_ms": [
+        46.74960060119629,
+        46.70033596038819,
+        46.759458465576174
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -951,10 +1733,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 12445389312,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4871606001397595e-05,
       "max_restart_p50_ms": 28.597824096679688,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 28.552847862243652,
+      "median_restart_p95_ms": 28.75814332962036,
+      "median_restart_p99_ms": 28.791462497711183,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 28.512959480285645,
       "node_label": "PRO5000-A",
@@ -962,6 +1750,16 @@
         28.512959480285645,
         28.552847862243652,
         28.597824096679688
+      ],
+      "restart_p95_ms": [
+        28.723338413238526,
+        28.75814332962036,
+        28.798890399932862
+      ],
+      "restart_p99_ms": [
+        28.791462497711183,
+        28.784489574432374,
+        28.834956245422365
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -975,10 +1773,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 13210239488,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4440818378934637e-05,
       "max_restart_p50_ms": 31.631840705871582,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 31.623647689819336,
+      "median_restart_p95_ms": 31.73992357254028,
+      "median_restart_p99_ms": 31.763241291046146,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 31.56449604034424,
       "node_label": "PRO5000-A",
@@ -986,6 +1790,16 @@
         31.623647689819336,
         31.631840705871582,
         31.56449604034424
+      ],
+      "restart_p95_ms": [
+        31.73992357254028,
+        31.74480628967285,
+        31.71641244888306
+      ],
+      "restart_p99_ms": [
+        31.765140991210938,
+        31.763241291046146,
+        31.74229637145996
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -999,10 +1813,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16189502464,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.5059374820557423e-05,
       "max_restart_p50_ms": 42.92068862915039,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 42.919776916503906,
+      "median_restart_p95_ms": 43.28657283782959,
+      "median_restart_p99_ms": 43.36063289642334,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 42.892961502075195,
       "node_label": "PRO5000-A",
@@ -1010,6 +1830,16 @@
         42.892961502075195,
         42.919776916503906,
         42.92068862915039
+      ],
+      "restart_p95_ms": [
+        43.26044406890869,
+        43.28657283782959,
+        43.30668621063233
+      ],
+      "restart_p99_ms": [
+        43.36063289642334,
+        43.37128395080567,
+        43.3351989364624
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1023,10 +1853,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 20697818624,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4737388230278157e-05,
       "max_restart_p50_ms": 62.249183654785156,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 62.24430465698242,
+      "median_restart_p95_ms": 62.47651386260986,
+      "median_restart_p99_ms": 62.53823005676269,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 62.125247955322266,
       "node_label": "PRO5000-A",
@@ -1034,6 +1870,16 @@
         62.125247955322266,
         62.24430465698242,
         62.249183654785156
+      ],
+      "restart_p95_ms": [
+        62.37643756866456,
+        62.47651386260986,
+        62.530774879455564
+      ],
+      "restart_p99_ms": [
+        62.45668098449707,
+        62.53823005676269,
+        62.66178916931152
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1047,10 +1893,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 12696091136,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.5982084480347112e-05,
       "max_restart_p50_ms": 32.54531288146973,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 32.53817558288574,
+      "median_restart_p95_ms": 32.60747756958008,
+      "median_restart_p99_ms": 32.64195510864258,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 32.49903869628906,
       "node_label": "PRO5000-A",
@@ -1058,6 +1910,16 @@
         32.54531288146973,
         32.53817558288574,
         32.49903869628906
+      ],
+      "restart_p95_ms": [
+        32.633646392822264,
+        32.60747756958008,
+        32.582976722717284
+      ],
+      "restart_p99_ms": [
+        32.660524215698246,
+        32.64195510864258,
+        32.60217761993408
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1071,10 +1933,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 18207868416,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.5053521312656812e-05,
       "max_restart_p50_ms": 52.01884841918945,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 51.97006416320801,
+      "median_restart_p95_ms": 52.19007225036621,
+      "median_restart_p99_ms": 52.26449413299561,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 51.94148826599121,
       "node_label": "PRO5000-A",
@@ -1082,6 +1950,16 @@
         51.94148826599121,
         52.01884841918945,
         51.97006416320801
+      ],
+      "restart_p95_ms": [
+        52.14771766662598,
+        52.19007225036621,
+        52.24990653991699
+      ],
+      "restart_p99_ms": [
+        52.17759761810303,
+        52.26449413299561,
+        52.292602386474606
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1095,10 +1973,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 21082192896,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4348400984308682e-05,
       "max_restart_p50_ms": 62.60904121398926,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 62.55462455749512,
+      "median_restart_p95_ms": 62.82429809570312,
+      "median_restart_p99_ms": 62.84293785095215,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 62.53678512573242,
       "node_label": "PRO5000-A",
@@ -1106,6 +1990,16 @@
         62.53678512573242,
         62.60904121398926,
         62.55462455749512
+      ],
+      "restart_p95_ms": [
+        62.75483589172363,
+        62.865159034729004,
+        62.82429809570312
+      ],
+      "restart_p99_ms": [
+        62.7926549911499,
+        62.920479164123535,
+        62.84293785095215
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1119,10 +2013,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 36061444608,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.55601953540463e-05,
       "max_restart_p50_ms": 124.9724349975586,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 124.85279846191406,
+      "median_restart_p95_ms": 125.16599617004394,
+      "median_restart_p99_ms": 125.28584884643554,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 124.52172470092773,
       "node_label": "PRO5000-A",
@@ -1130,6 +2030,16 @@
         124.52172470092773,
         124.85279846191406,
         124.9724349975586
+      ],
+      "restart_p95_ms": [
+        124.88223190307617,
+        125.16599617004394,
+        125.38796501159668
+      ],
+      "restart_p99_ms": [
+        124.93269180297852,
+        125.28584884643554,
+        125.4690168762207
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1143,10 +2053,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 23440909824,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.541827598179225e-05,
       "max_restart_p50_ms": 73.41321563720703,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 73.27328109741211,
+      "median_restart_p95_ms": 73.65336456298827,
+      "median_restart_p99_ms": 73.70011299133301,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 73.23041534423828,
       "node_label": "PRO5000-A",
@@ -1154,6 +2070,16 @@
         73.23041534423828,
         73.27328109741211,
         73.41321563720703
+      ],
+      "restart_p95_ms": [
+        73.57394828796386,
+        73.68344726562499,
+        73.65336456298827
+      ],
+      "restart_p99_ms": [
+        73.66027015686035,
+        73.7156332397461,
+        73.70011299133301
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1167,10 +2093,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 27480015360,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.504266012692824e-05,
       "max_restart_p50_ms": 88.1767807006836,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 87.90192031860352,
+      "median_restart_p95_ms": 88.4127384185791,
+      "median_restart_p99_ms": 88.43688987731933,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 87.67606353759766,
       "node_label": "PRO5000-A",
@@ -1178,6 +2110,16 @@
         87.67606353759766,
         87.90192031860352,
         88.1767807006836
+      ],
+      "restart_p95_ms": [
+        88.0977310180664,
+        88.4127384185791,
+        88.64737472534179
+      ],
+      "restart_p99_ms": [
+        88.20295242309571,
+        88.43688987731933,
+        88.7191975402832
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1191,10 +2133,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 48542821888,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4825661967042834e-05,
       "max_restart_p50_ms": 174.6042251586914,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 174.37659454345703,
+      "median_restart_p95_ms": 174.78120040893555,
+      "median_restart_p99_ms": 174.89338073730468,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 173.98287963867188,
       "node_label": "PRO5000-A",
@@ -1202,6 +2150,16 @@
         173.98287963867188,
         174.37659454345703,
         174.6042251586914
+      ],
+      "restart_p95_ms": [
+        174.4312843322754,
+        174.78120040893555,
+        175.08577728271484
+      ],
+      "restart_p99_ms": [
+        174.5680174255371,
+        174.89338073730468,
+        175.14204528808594
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1213,12 +2171,206 @@
     },
     {
       "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 8554219008,
+      "max_peak_reserved_bytes": 8845787136,
+      "max_relative_l2": 2.6421337679494172e-05,
+      "max_restart_p50_ms": 13.053824424743652,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 13.051295757293701,
+      "median_restart_p95_ms": 13.111849832534789,
+      "median_restart_p99_ms": 13.13350305557251,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 13.019887924194336,
+      "node_label": "PRO5000-A",
+      "restart_p50_ms": [
+        13.019887924194336,
+        13.053824424743652,
+        13.051295757293701
+      ],
+      "restart_p95_ms": [
+        13.096228837966919,
+        13.121705245971679,
+        13.111849832534789
+      ],
+      "restart_p99_ms": [
+        13.102867794036866,
+        13.146932744979859,
+        13.13350305557251
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 8192,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m8192_balanced",
+      "trace_sha256": "54ca9b5a5929b6fd8d7738fc7f1b9c7e59d907be46947d41d74116a42629e2e4",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 11772626432,
+      "max_peak_reserved_bytes": 11951669248,
+      "max_relative_l2": 2.4811128241708502e-05,
+      "max_restart_p50_ms": 25.92367935180664,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 25.90351963043213,
+      "median_restart_p95_ms": 26.106525516510008,
+      "median_restart_p99_ms": 26.129450759887693,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 25.89627170562744,
+      "node_label": "PRO5000-A",
+      "restart_p50_ms": [
+        25.89627170562744,
+        25.90351963043213,
+        25.92367935180664
+      ],
+      "restart_p95_ms": [
+        26.096509075164793,
+        26.106525516510008,
+        26.126269531250003
+      ],
+      "restart_p99_ms": [
+        26.129215545654297,
+        26.129450759887693,
+        26.15988857269287
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_balanced",
+      "trace_sha256": "100453edcee8eb0735a6fa72725554c089420e607c4a3c20310900267a0eabf0",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 18208392704,
+      "max_peak_reserved_bytes": 18425577472,
+      "max_relative_l2": 2.512910396035295e-05,
+      "max_restart_p50_ms": 51.951711654663086,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 51.87844657897949,
+      "median_restart_p95_ms": 52.10464248657227,
+      "median_restart_p99_ms": 52.127568016052244,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 51.85761642456055,
+      "node_label": "PRO5000-A",
+      "restart_p50_ms": [
+        51.85761642456055,
+        51.87844657897949,
+        51.951711654663086
+      ],
+      "restart_p95_ms": [
+        52.056583595275875,
+        52.10464248657227,
+        52.158841133117676
+      ],
+      "restart_p99_ms": [
+        52.109199600219725,
+        52.127568016052244,
+        52.22240341186524
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 32768,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m32768_balanced",
+      "trace_sha256": "e0a9718dc228f05c5eeb3dcbe32e7795ec2b160dcfa6c1dd3ad2e52557376a52",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 23441647104,
+      "max_peak_reserved_bytes": 23920115712,
+      "max_relative_l2": 2.4507382477167994e-05,
+      "max_restart_p50_ms": 73.08345413208008,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 73.03496170043945,
+      "median_restart_p95_ms": 73.49632759094237,
+      "median_restart_p99_ms": 73.6937322998047,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 72.97299194335938,
+      "node_label": "PRO5000-A",
+      "restart_p50_ms": [
+        72.97299194335938,
+        73.03496170043945,
+        73.08345413208008
+      ],
+      "restart_p95_ms": [
+        73.4372703552246,
+        73.55015754699707,
+        73.49632759094237
+      ],
+      "restart_p99_ms": [
+        73.66477989196777,
+        73.6937322998047,
+        73.73221717834473
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 46080,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m46080_balanced",
+      "trace_sha256": "c96eb4795adc55b43399869c77773faa40c25e24cfb3608c93fdd031937bd2c8",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 10394195456,
+      "max_peak_reserved_bytes": 13423869952,
       "max_relative_l2": 1.2738561963487882e-05,
       "max_restart_p50_ms": 29.107376098632812,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 29.0034236907959,
+      "median_restart_p95_ms": 29.226559543609618,
+      "median_restart_p99_ms": 29.943649616241466,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 28.99728012084961,
       "node_label": "PRO5000-B",
@@ -1226,6 +2378,16 @@
         29.107376098632812,
         28.99728012084961,
         29.0034236907959
+      ],
+      "restart_p95_ms": [
+        29.177892780303953,
+        29.226559543609618,
+        29.230123424530028
+      ],
+      "restart_p99_ms": [
+        29.665080242156986,
+        29.943649616241466,
+        31.996112861633303
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -1239,10 +2401,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 19750245888,
+      "max_peak_reserved_bytes": 20923285504,
       "max_relative_l2": 1.3563970242103096e-05,
       "max_restart_p50_ms": 57.64003372192383,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 57.54537582397461,
+      "median_restart_p95_ms": 57.79147510528565,
+      "median_restart_p99_ms": 58.365290298461915,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 57.537200927734375,
       "node_label": "PRO5000-B",
@@ -1250,6 +2418,16 @@
         57.64003372192383,
         57.54537582397461,
         57.537200927734375
+      ],
+      "restart_p95_ms": [
+        57.79147510528565,
+        57.808641815185545,
+        57.70737190246582
+      ],
+      "restart_p99_ms": [
+        57.909221687316894,
+        59.84188964843751,
+        58.365290298461915
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1263,10 +2441,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 38462346752,
+      "max_peak_reserved_bytes": 40745566208,
       "max_relative_l2": 1.2665442227444146e-05,
       "max_restart_p50_ms": 119.02115249633789,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 118.97814178466797,
+      "median_restart_p95_ms": 119.1318790435791,
+      "median_restart_p99_ms": 119.23997505187988,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 118.88086700439453,
       "node_label": "PRO5000-B",
@@ -1274,6 +2458,16 @@
         118.88086700439453,
         118.97814178466797,
         119.02115249633789
+      ],
+      "restart_p95_ms": [
+        119.05188369750977,
+        119.1318790435791,
+        119.20688934326171
+      ],
+      "restart_p99_ms": [
+        119.15659805297851,
+        119.23997505187988,
+        119.46617462158204
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1287,10 +2481,16 @@
       "all_inline_correct": true,
       "backend": "blockscale_groupwise",
       "max_peak_allocated_bytes": 53667042816,
+      "max_peak_reserved_bytes": 59213086720,
       "max_relative_l2": 1.2539945601020008e-05,
       "max_restart_p50_ms": 168.37181091308594,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 168.3524169921875,
+      "median_restart_p95_ms": 168.54915161132814,
+      "median_restart_p99_ms": 168.7470573425293,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 168.24839782714844,
       "node_label": "PRO5000-B",
@@ -1298,6 +2498,16 @@
         168.37181091308594,
         168.3524169921875,
         168.24839782714844
+      ],
+      "restart_p95_ms": [
+        168.6543167114258,
+        168.54915161132814,
+        168.43346633911133
+      ],
+      "restart_p99_ms": [
+        168.77520874023438,
+        168.7470573425293,
+        168.57808563232422
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1311,10 +2521,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 43.48784,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 43.455330000000004,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 43.44814,
       "node_label": "PRO5000-B",
@@ -1323,6 +2539,8 @@
         43.455330000000004,
         43.44814
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
       "timing_level": "native_E0_prequantized",
@@ -1335,10 +2553,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 86.49435000000001,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 86.47322,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 86.44462,
       "node_label": "PRO5000-B",
@@ -1347,6 +2571,8 @@
         86.47322,
         86.44462
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -1359,10 +2585,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 113.85592,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 113.6945,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 113.66896000000001,
       "node_label": "PRO5000-B",
@@ -1371,6 +2603,8 @@
         113.85592,
         113.66896000000001
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -1383,10 +2617,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 90.09147,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 90.08978,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 90.0695,
       "node_label": "PRO5000-B",
@@ -1395,6 +2635,8 @@
         90.09147,
         90.0695
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -1407,10 +2649,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 94.85666,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 94.78576,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 94.72547,
       "node_label": "PRO5000-B",
@@ -1419,6 +2667,8 @@
         94.85666,
         94.78576
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -1431,10 +2681,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 114.98205,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 114.95300999999999,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 114.77083,
       "node_label": "PRO5000-B",
@@ -1443,6 +2699,8 @@
         114.95300999999999,
         114.77083
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -1455,10 +2713,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 148.64797000000002,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 148.612,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 148.6097,
       "node_label": "PRO5000-B",
@@ -1467,6 +2731,8 @@
         148.612,
         148.6097
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -1479,10 +2745,16 @@
       "all_inline_correct": true,
       "backend": "megamoe_native",
       "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": null,
       "max_restart_p50_ms": 95.6127,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
       "median_restart_p50_ms": 95.57885,
+      "median_restart_p95_ms": null,
+      "median_restart_p99_ms": null,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 95.52964999999999,
       "node_label": "PRO5000-B",
@@ -1491,6 +2763,8 @@
         95.52964999999999,
         95.57885
       ],
+      "restart_p95_ms": [],
+      "restart_p99_ms": [],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
       "timing_level": "native_E0_prequantized",
@@ -1501,12 +2775,378 @@
     },
     {
       "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 43.46998000000001,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 43.457629999999995,
+      "median_restart_p95_ms": 43.75004,
+      "median_restart_p99_ms": 43.935900000000004,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 43.41314,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        43.41314,
+        43.46998000000001,
+        43.457629999999995
+      ],
+      "restart_p95_ms": [
+        43.75004,
+        43.81643,
+        43.705510000000004
+      ],
+      "restart_p99_ms": [
+        43.935900000000004,
+        44.018699999999995,
+        43.77673
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 8192,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m8192_balanced",
+      "trace_sha256": "54ca9b5a5929b6fd8d7738fc7f1b9c7e59d907be46947d41d74116a42629e2e4",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 86.44292999999999,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 86.43411,
+      "median_restart_p95_ms": 86.97405,
+      "median_restart_p99_ms": 87.13892,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 86.41975,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        86.43411,
+        86.44292999999999,
+        86.41975
+      ],
+      "restart_p95_ms": [
+        86.90491,
+        86.97405,
+        87.0599
+      ],
+      "restart_p99_ms": [
+        87.13892,
+        87.14703,
+        87.11881
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_balanced",
+      "trace_sha256": "100453edcee8eb0735a6fa72725554c089420e607c4a3c20310900267a0eabf0",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 113.75211,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 113.75171,
+      "median_restart_p95_ms": 114.50384,
+      "median_restart_p99_ms": 114.57959,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 113.70274,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        113.75211,
+        113.75171,
+        113.70274
+      ],
+      "restart_p95_ms": [
+        114.51180000000001,
+        114.50384,
+        114.32438
+      ],
+      "restart_p99_ms": [
+        114.68246,
+        114.57959,
+        114.42953999999999
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_joint_aligned_max",
+      "trace_sha256": "679d704bbb68fc256df39459d16bd5110079e9ebfbd81a7c3daf9a39641fecdf",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 89.43914,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 89.38731,
+      "median_restart_p95_ms": 89.76752,
+      "median_restart_p99_ms": 89.90258,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 89.38096,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        89.43914,
+        89.38096,
+        89.38731
+      ],
+      "restart_p95_ms": [
+        89.76752,
+        89.78202,
+        89.7384
+      ],
+      "restart_p99_ms": [
+        89.83561,
+        89.90258,
+        89.99013000000001
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_persistent_single_hot",
+      "trace_sha256": "b40404326e36e57f5936221383bab2761b1301df21f773b02398e683f07a2c2c",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 90.1413,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 90.08928,
+      "median_restart_p95_ms": 90.59902000000001,
+      "median_restart_p99_ms": 90.82849,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 90.08818,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        90.1413,
+        90.08928,
+        90.08818
+      ],
+      "restart_p95_ms": [
+        90.59902000000001,
+        90.62116,
+        90.50264999999999
+      ],
+      "restart_p99_ms": [
+        90.82849,
+        90.76688,
+        90.87683
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_rank_r1.106",
+      "trace_sha256": "f2f81cf31c9e1090ead44d4c9e1a5472a1dbd80c81c8f3c054ac3fec1a9d36f1",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 94.96448,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 94.81589,
+      "median_restart_p95_ms": 95.50197999999999,
+      "median_restart_p99_ms": 95.76451,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 94.81537,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        94.81537,
+        94.81589,
+        94.96448
+      ],
+      "restart_p95_ms": [
+        95.50744999999999,
+        95.50197999999999,
+        95.43953
+      ],
+      "restart_p99_ms": [
+        95.76451,
+        95.78687,
+        95.74155
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_rank_r1.227",
+      "trace_sha256": "fd2d1279f9d70611bce57e97c2fc15038dc8984619e37fff1ab79bfd4321e906",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 115.03016000000001,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 114.98226,
+      "median_restart_p95_ms": 115.69581,
+      "median_restart_p99_ms": 115.97585000000001,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 114.90437,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        114.98226,
+        114.90437,
+        115.03016000000001
+      ],
+      "restart_p95_ms": [
+        115.69581,
+        115.67128,
+        115.76435000000001
+      ],
+      "restart_p99_ms": [
+        115.97585000000001,
+        115.78211,
+        116.03554
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_rank_r1.698",
+      "trace_sha256": "01a3f6c2460f6ec094944b44e1324ab1d71760e00c83dae3b5e1e969ed68a470",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 148.63629999999998,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 148.60547,
+      "median_restart_p95_ms": 148.93597,
+      "median_restart_p99_ms": 149.04428,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 148.60101999999998,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        148.60101999999998,
+        148.63629999999998,
+        148.60547
+      ],
+      "restart_p95_ms": [
+        148.93597,
+        148.98956,
+        148.92248999999998
+      ],
+      "restart_p99_ms": [
+        149.04428,
+        149.06745999999998,
+        149.03025
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_segment_aligned",
+      "trace_sha256": "1d907fd2a93fe03190f03dbd3c982be584ca7420d323d43b546debd49e629769",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "megamoe_native",
+      "max_peak_allocated_bytes": null,
+      "max_peak_reserved_bytes": null,
+      "max_relative_l2": null,
+      "max_restart_p50_ms": 95.59360000000001,
+      "max_timed_allocator_delta": {},
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": null,
+      "median_replica_preload_ms": null,
+      "median_restart_p50_ms": 95.57439,
+      "median_restart_p95_ms": 96.53005999999999,
+      "median_restart_p99_ms": 97.38888,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 95.37912,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        95.57439,
+        95.59360000000001,
+        95.37912
+      ],
+      "restart_p95_ms": [
+        96.53005999999999,
+        96.47122999999999,
+        96.63717999999999
+      ],
+      "restart_p99_ms": [
+        97.41695,
+        96.79852000000001,
+        97.38888
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "native_E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_segment_permuted",
+      "trace_sha256": "2e7804e419a30bfcab00a321dc190ad37c775a749dc01fd0acebaae65fd2201e",
+      "variant": "p2p_direct_p95_p99"
+    },
+    {
+      "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 8554087936,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 25.35484790802002,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 25.352864265441895,
+      "median_restart_p95_ms": 25.41735019683838,
+      "median_restart_p99_ms": 26.14874744415284,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 25.310768127441406,
       "node_label": "PRO5000-B",
@@ -1514,6 +3154,16 @@
         25.35484790802002,
         25.352864265441895,
         25.310768127441406
+      ],
+      "restart_p95_ms": [
+        25.41735019683838,
+        25.44434118270874,
+        25.352195930480956
+      ],
+      "restart_p99_ms": [
+        26.51176485061646,
+        26.14874744415284,
+        25.379359321594237
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -1527,10 +3177,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 14726205440,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 50.69532775878906,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 50.68044662475586,
+      "median_restart_p95_ms": 50.77875308990478,
+      "median_restart_p99_ms": 51.083415031433105,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 50.679439544677734,
       "node_label": "PRO5000-B",
@@ -1538,6 +3194,16 @@
         50.69532775878906,
         50.679439544677734,
         50.68044662475586
+      ],
+      "restart_p95_ms": [
+        50.77875308990478,
+        50.76649475097656,
+        50.789075469970705
+      ],
+      "restart_p99_ms": [
+        51.083415031433105,
+        50.810240745544434,
+        51.457071609497085
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1551,10 +3217,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 28410515456,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 0.0,
       "max_restart_p50_ms": 114.73168182373047,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 114.6973762512207,
+      "median_restart_p95_ms": 114.82171516418457,
+      "median_restart_p99_ms": 114.98487182617187,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 114.67021179199219,
       "node_label": "PRO5000-B",
@@ -1562,6 +3234,16 @@
         114.73168182373047,
         114.6973762512207,
         114.67021179199219
+      ],
+      "restart_p95_ms": [
+        115.16521263122559,
+        114.81273002624512,
+        114.82171516418457
+      ],
+      "restart_p99_ms": [
+        115.78276107788086,
+        114.86860565185546,
+        114.98487182617187
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1575,10 +3257,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 39533211648,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 3.822575145306928e-09,
       "max_restart_p50_ms": 161.75990295410156,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 161.75267028808594,
+      "median_restart_p95_ms": 161.91969680786133,
+      "median_restart_p99_ms": 161.99652572631837,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 161.7522201538086,
       "node_label": "PRO5000-B",
@@ -1586,6 +3274,16 @@
         161.75990295410156,
         161.75267028808594,
         161.7522201538086
+      ],
+      "restart_p95_ms": [
+        161.94702072143556,
+        161.91969680786133,
+        161.89215164184571
+      ],
+      "restart_p99_ms": [
+        162.02313430786134,
+        161.99652572631837,
+        161.90939834594724
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1599,10 +3297,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 8554087936,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.5890185497701168e-05,
       "max_restart_p50_ms": 13.943120002746582,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 13.939216136932373,
+      "median_restart_p95_ms": 13.957132959365845,
+      "median_restart_p99_ms": 13.972921028137208,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 13.937024116516113,
       "node_label": "PRO5000-B",
@@ -1610,6 +3314,16 @@
         13.943120002746582,
         13.939216136932373,
         13.937024116516113
+      ],
+      "restart_p95_ms": [
+        13.961716604232787,
+        13.957132959365845,
+        13.956847620010377
+      ],
+      "restart_p99_ms": [
+        14.014260129928603,
+        13.972921028137208,
+        13.966391019821167
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -1623,10 +3337,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 9271703040,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.656271681189537e-05,
       "max_restart_p50_ms": 16.138671875,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 16.114367485046387,
+      "median_restart_p95_ms": 16.166718864440917,
+      "median_restart_p99_ms": 16.17772298812866,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 16.08123207092285,
       "node_label": "PRO5000-B",
@@ -1634,6 +3354,16 @@
         16.08123207092285,
         16.114367485046387,
         16.138671875
+      ],
+      "restart_p95_ms": [
+        16.12573699951172,
+        16.166718864440917,
+        16.180211734771728
+      ],
+      "restart_p99_ms": [
+        16.150053577423098,
+        16.17772298812866,
+        16.185849361419677
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -1647,10 +3377,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 13017008128,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.601135020086076e-05,
       "max_restart_p50_ms": 33.97688102722168,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 33.970815658569336,
+      "median_restart_p95_ms": 34.0119270324707,
+      "median_restart_p99_ms": 34.030412673950195,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 33.97052764892578,
       "node_label": "PRO5000-B",
@@ -1658,6 +3394,16 @@
         33.97688102722168,
         33.97052764892578,
         33.970815658569336
+      ],
+      "restart_p95_ms": [
+        34.01852951049805,
+        34.011483383178714,
+        34.0119270324707
+      ],
+      "restart_p99_ms": [
+        34.038493080139155,
+        34.030412673950195,
+        34.029492912292476
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -1671,10 +3417,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 11772364288,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.527193646528758e-05,
       "max_restart_p50_ms": 27.76252841949463,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 27.761903762817383,
+      "median_restart_p95_ms": 27.79002056121826,
+      "median_restart_p99_ms": 27.806929626464843,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 27.753328323364258,
       "node_label": "PRO5000-B",
@@ -1682,6 +3434,16 @@
         27.761903762817383,
         27.76252841949463,
         27.753328323364258
+      ],
+      "restart_p95_ms": [
+        27.79002056121826,
+        27.79515590667725,
+        27.789070701599123
+      ],
+      "restart_p99_ms": [
+        27.80377685546875,
+        27.815701389312746,
+        27.806929626464843
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1695,10 +3457,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16460648448,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.6163059374084696e-05,
       "max_restart_p50_ms": 46.9068489074707,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 46.89673614501953,
+      "median_restart_p95_ms": 47.18746223449707,
+      "median_restart_p99_ms": 47.24821002960205,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 46.8144474029541,
       "node_label": "PRO5000-B",
@@ -1706,6 +3474,16 @@
         46.8144474029541,
         46.9068489074707,
         46.89673614501953
+      ],
+      "restart_p95_ms": [
+        47.08822727203369,
+        47.20119514465332,
+        47.18746223449707
+      ],
+      "restart_p99_ms": [
+        47.12532215118408,
+        47.25392303466797,
+        47.24821002960205
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1718,11 +3496,64 @@
     {
       "all_inline_correct": true,
       "backend": "sonic",
+      "max_peak_allocated_bytes": 12949282816,
+      "max_peak_reserved_bytes": 13920894976,
+      "max_relative_l2": 2.4925779143813998e-05,
+      "max_restart_p50_ms": 34.03041648864746,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 1700,
+        "allocation.all.freed": 1699,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 33.98601531982422,
+      "median_restart_p95_ms": 34.04275588989258,
+      "median_restart_p99_ms": 34.058224563598635,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 33.957584381103516,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        33.957584381103516,
+        33.98601531982422,
+        34.03041648864746
+      ],
+      "restart_p95_ms": [
+        34.01197128295898,
+        34.04275588989258,
+        34.08901863098145
+      ],
+      "restart_p99_ms": [
+        34.039024925231935,
+        34.058224563598635,
+        34.09821193695068
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_persistent_single_hot",
+      "trace_sha256": "b40404326e36e57f5936221383bab2761b1301df21f773b02398e683f07a2c2c",
+      "variant": "fused_segmented_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
       "max_peak_allocated_bytes": 12445389312,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.428080370009411e-05,
       "max_restart_p50_ms": 28.932512283325195,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 28.89915180206299,
+      "median_restart_p95_ms": 29.115574645996094,
+      "median_restart_p99_ms": 29.142696094512942,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 28.86409568786621,
       "node_label": "PRO5000-B",
@@ -1730,6 +3561,16 @@
         28.86409568786621,
         28.89915180206299,
         28.932512283325195
+      ],
+      "restart_p95_ms": [
+        29.072173404693604,
+        29.115574645996094,
+        29.156463718414305
+      ],
+      "restart_p99_ms": [
+        29.103899593353272,
+        29.142696094512942,
+        29.17157964706421
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1743,10 +3584,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 13210239488,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.467129161232151e-05,
       "max_restart_p50_ms": 32.049936294555664,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 32.02489471435547,
+      "median_restart_p95_ms": 32.1361967086792,
+      "median_restart_p99_ms": 32.16667995452881,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 31.981823921203613,
       "node_label": "PRO5000-B",
@@ -1754,6 +3601,16 @@
         31.981823921203613,
         32.02489471435547,
         32.049936294555664
+      ],
+      "restart_p95_ms": [
+        32.1361967086792,
+        32.11880950927734,
+        32.14955368041992
+      ],
+      "restart_p99_ms": [
+        32.16667995452881,
+        32.16267517089844,
+        32.174988746643066
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1767,10 +3624,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16189502464,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.6083493139594793e-05,
       "max_restart_p50_ms": 43.50582313537598,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 43.4762077331543,
+      "median_restart_p95_ms": 43.915519905090335,
+      "median_restart_p99_ms": 43.983207626342775,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 43.36851119995117,
       "node_label": "PRO5000-B",
@@ -1778,6 +3641,16 @@
         43.36851119995117,
         43.50582313537598,
         43.4762077331543
+      ],
+      "restart_p95_ms": [
+        43.843930625915526,
+        43.915519905090335,
+        43.93483371734619
+      ],
+      "restart_p99_ms": [
+        43.862572288513185,
+        43.983207626342775,
+        44.00333225250244
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1791,10 +3664,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 20697818624,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4959295842563733e-05,
       "max_restart_p50_ms": 70.87662124633789,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 67.53822708129883,
+      "median_restart_p95_ms": 67.60137977600097,
+      "median_restart_p99_ms": 67.64754432678222,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 67.5344467163086,
       "node_label": "PRO5000-B",
@@ -1802,6 +3681,16 @@
         70.87662124633789,
         67.53822708129883,
         67.5344467163086
+      ],
+      "restart_p95_ms": [
+        70.913077545166,
+        67.58527793884276,
+        67.60137977600097
+      ],
+      "restart_p99_ms": [
+        70.9313530731201,
+        67.62491264343261,
+        67.64754432678222
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1815,10 +3704,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 12696091136,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.686778134375345e-05,
       "max_restart_p50_ms": 37.07263946533203,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 37.04870414733887,
+      "median_restart_p95_ms": 37.10451164245606,
+      "median_restart_p99_ms": 37.12198501586914,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 37.048208236694336,
       "node_label": "PRO5000-B",
@@ -1826,6 +3721,16 @@
         37.04870414733887,
         37.048208236694336,
         37.07263946533203
+      ],
+      "restart_p95_ms": [
+        37.10451164245606,
+        37.08847579956055,
+        37.1199010848999
+      ],
+      "restart_p99_ms": [
+        37.11852474212647,
+        37.12198501586914,
+        37.1475615310669
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -1839,10 +3744,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 18207868416,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4450026103295386e-05,
       "max_restart_p50_ms": 55.50884819030762,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 55.49515151977539,
+      "median_restart_p95_ms": 55.53756465911865,
+      "median_restart_p99_ms": 55.561053962707525,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 55.494062423706055,
       "node_label": "PRO5000-B",
@@ -1850,6 +3761,16 @@
         55.49515151977539,
         55.494062423706055,
         55.50884819030762
+      ],
+      "restart_p95_ms": [
+        55.53756465911865,
+        55.536874771118164,
+        55.55095062255859
+      ],
+      "restart_p99_ms": [
+        55.561053962707525,
+        55.5483667755127,
+        55.5805952835083
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1863,10 +3784,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 21082192896,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4554050469305366e-05,
       "max_restart_p50_ms": 63.410512924194336,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 63.36569595336914,
+      "median_restart_p95_ms": 63.644406890869135,
+      "median_restart_p99_ms": 63.67192859649658,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 63.269344329833984,
       "node_label": "PRO5000-B",
@@ -1874,6 +3801,16 @@
         63.269344329833984,
         63.36569595336914,
         63.410512924194336
+      ],
+      "restart_p95_ms": [
+        63.57870941162109,
+        63.644406890869135,
+        63.72168827056885
+      ],
+      "restart_p99_ms": [
+        63.63174293518067,
+        63.67192859649658,
+        63.76453659057617
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1887,10 +3824,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 36061444608,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.524916453694459e-05,
       "max_restart_p50_ms": 134.62273406982422,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 134.6209945678711,
+      "median_restart_p95_ms": 134.73118362426757,
+      "median_restart_p99_ms": 134.79140106201174,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 134.61115264892578,
       "node_label": "PRO5000-B",
@@ -1898,6 +3841,16 @@
         134.61115264892578,
         134.6209945678711,
         134.62273406982422
+      ],
+      "restart_p95_ms": [
+        134.72490539550782,
+        134.73118362426757,
+        134.7318183898926
+      ],
+      "restart_p99_ms": [
+        134.79140106201174,
+        134.73872817993163,
+        134.81744186401366
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -1911,10 +3864,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 23440909824,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.460019641148392e-05,
       "max_restart_p50_ms": 78.00864028930664,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 78.00656127929688,
+      "median_restart_p95_ms": 78.0515365600586,
+      "median_restart_p99_ms": 78.07989776611328,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 78.00497817993164,
       "node_label": "PRO5000-B",
@@ -1922,6 +3881,16 @@
         78.00497817993164,
         78.00656127929688,
         78.00864028930664
+      ],
+      "restart_p95_ms": [
+        78.0433349609375,
+        78.0515365600586,
+        78.05829582214355
+      ],
+      "restart_p99_ms": [
+        78.09188781738281,
+        78.07989776611328,
+        78.06815528869629
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1935,10 +3904,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 27480015360,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4530088921892457e-05,
       "max_restart_p50_ms": 89.3614730834961,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 89.11459350585938,
+      "median_restart_p95_ms": 89.70853996276855,
+      "median_restart_p99_ms": 89.82249588012697,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 88.7495231628418,
       "node_label": "PRO5000-B",
@@ -1946,6 +3921,16 @@
         88.7495231628418,
         89.11459350585938,
         89.3614730834961
+      ],
+      "restart_p95_ms": [
+        89.2915168762207,
+        89.70853996276855,
+        89.93659896850586
+      ],
+      "restart_p99_ms": [
+        89.46491767883302,
+        89.82249588012697,
+        89.99018249511718
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1959,10 +3944,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 48542821888,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4709608624107204e-05,
       "max_restart_p50_ms": 189.10179138183594,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 189.1015853881836,
+      "median_restart_p95_ms": 189.21690139770507,
+      "median_restart_p99_ms": 189.26212402343748,
       "median_weight_migration_ms": null,
       "min_restart_p50_ms": 189.08827209472656,
       "node_label": "PRO5000-B",
@@ -1970,6 +3961,16 @@
         189.1015853881836,
         189.10179138183594,
         189.08827209472656
+      ],
+      "restart_p95_ms": [
+        189.2752883911133,
+        189.20692825317383,
+        189.21690139770507
+      ],
+      "restart_p99_ms": [
+        189.317891998291,
+        189.24354385375975,
+        189.26212402343748
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -1983,10 +3984,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 11521281024,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.491840859875083e-05,
       "max_restart_p50_ms": 20.44985580444336,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 381,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 20.439696311950684,
+      "median_restart_p95_ms": 20.482622051239012,
+      "median_restart_p99_ms": 20.50172863006592,
       "median_weight_migration_ms": 82.0437353104353,
       "min_restart_p50_ms": 20.4279842376709,
       "node_label": "PRO5000-B",
@@ -1994,6 +4001,16 @@
         20.4279842376709,
         20.44985580444336,
         20.439696311950684
+      ],
+      "restart_p95_ms": [
+        20.471673679351806,
+        20.495022869110105,
+        20.482622051239012
+      ],
+      "restart_p99_ms": [
+        20.494716739654546,
+        20.50172863006592,
+        20.52151672363281
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -2007,10 +4024,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 13997870592,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.6970023100147955e-05,
       "max_restart_p50_ms": 20.61382484436035,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 379,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 20.601183891296387,
+      "median_restart_p95_ms": 20.64133949279785,
+      "median_restart_p99_ms": 20.657892837524415,
       "median_weight_migration_ms": 79.90730227902532,
       "min_restart_p50_ms": 20.597392082214355,
       "node_label": "PRO5000-B",
@@ -2018,6 +4041,16 @@
         20.61382484436035,
         20.601183891296387,
         20.597392082214355
+      ],
+      "restart_p95_ms": [
+        20.651531982421876,
+        20.64133949279785,
+        20.638453578948976
+      ],
+      "restart_p99_ms": [
+        20.657892837524415,
+        20.695683574676515,
+        20.65281812667847
       ],
       "restarts": 3,
       "source_tokens_per_rank": 8192,
@@ -2031,10 +4064,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 18872573952,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.5471896151429974e-05,
       "max_restart_p50_ms": 38.45259094238281,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 257,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 38.45089530944824,
+      "median_restart_p95_ms": 38.52305850982666,
+      "median_restart_p99_ms": 38.55312263488769,
       "median_weight_migration_ms": 72.2179519943893,
       "min_restart_p50_ms": 38.43009567260742,
       "node_label": "PRO5000-B",
@@ -2042,6 +4081,16 @@
         38.45259094238281,
         38.43009567260742,
         38.45089530944824
+      ],
+      "restart_p95_ms": [
+        38.52110214233398,
+        38.52305850982666,
+        38.52830982208252
+      ],
+      "restart_p99_ms": [
+        38.543484458923345,
+        38.5615735244751,
+        38.55312263488769
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -2055,10 +4104,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16314327040,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.539531487855129e-05,
       "max_restart_p50_ms": 41.21144104003906,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 384,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 41.20854377746582,
+      "median_restart_p95_ms": 41.269475364685064,
+      "median_restart_p99_ms": 41.33977676391602,
       "median_weight_migration_ms": 84.14103789255023,
       "min_restart_p50_ms": 41.189552307128906,
       "node_label": "PRO5000-B",
@@ -2066,6 +4121,16 @@
         41.189552307128906,
         41.20854377746582,
         41.21144104003906
+      ],
+      "restart_p95_ms": [
+        41.26305675506592,
+        41.283378219604494,
+        41.269475364685064
+      ],
+      "restart_p99_ms": [
+        41.33977676391602,
+        41.317417793273925,
+        41.36506248474121
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -2079,10 +4144,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16664476672,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4219258193625137e-05,
       "max_restart_p50_ms": 41.375423431396484,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 384,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 41.373985290527344,
+      "median_restart_p95_ms": 41.450081253051756,
+      "median_restart_p99_ms": 41.485939025878906,
       "median_weight_migration_ms": 84.92887997999787,
       "min_restart_p50_ms": 41.35655975341797,
       "node_label": "PRO5000-B",
@@ -2090,6 +4161,16 @@
         41.375423431396484,
         41.35655975341797,
         41.373985290527344
+      ],
+      "restart_p95_ms": [
+        41.45139408111572,
+        41.42622585296631,
+        41.450081253051756
+      ],
+      "restart_p99_ms": [
+        41.49564163208008,
+        41.455424003601074,
+        41.485939025878906
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -2103,10 +4184,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 18612724224,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.3903958208393306e-05,
       "max_restart_p50_ms": 41.38142395019531,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 384,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 41.37982368469238,
+      "median_restart_p95_ms": 41.446435165405276,
+      "median_restart_p99_ms": 41.47097690582276,
       "median_weight_migration_ms": 86.97635633870959,
       "min_restart_p50_ms": 41.37049674987793,
       "node_label": "PRO5000-B",
@@ -2114,6 +4201,16 @@
         41.37049674987793,
         41.37982368469238,
         41.38142395019531
+      ],
+      "restart_p95_ms": [
+        41.446435165405276,
+        41.44579391479492,
+        41.459624671936034
+      ],
+      "restart_p99_ms": [
+        41.46465835571289,
+        41.47097690582276,
+        41.51829849243165
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -2127,10 +4224,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 21612790272,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.506897726561874e-05,
       "max_restart_p50_ms": 41.44625663757324,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 378,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 41.44579315185547,
+      "median_restart_p95_ms": 41.51748085021973,
+      "median_restart_p99_ms": 41.562150650024414,
       "median_weight_migration_ms": 87.75045769289136,
       "min_restart_p50_ms": 41.4379997253418,
       "node_label": "PRO5000-B",
@@ -2138,6 +4241,16 @@
         41.44579315185547,
         41.44625663757324,
         41.4379997253418
+      ],
+      "restart_p95_ms": [
+        41.5135627746582,
+        41.51748085021973,
+        41.520758056640624
+      ],
+      "restart_p99_ms": [
+        41.533323211669924,
+        41.562150650024414,
+        41.620303840637206
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -2151,10 +4264,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 16390113792,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.5583747628843412e-05,
       "max_restart_p50_ms": 41.42464065551758,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 383,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 41.42446327209473,
+      "median_restart_p95_ms": 41.47924404144287,
+      "median_restart_p99_ms": 41.51822376251221,
       "median_weight_migration_ms": 87.75472780689597,
       "min_restart_p50_ms": 41.42118453979492,
       "node_label": "PRO5000-B",
@@ -2162,6 +4281,16 @@
         41.42118453979492,
         41.42464065551758,
         41.42446327209473
+      ],
+      "restart_p95_ms": [
+        41.46995658874512,
+        41.48694877624512,
+        41.47924404144287
+      ],
+      "restart_p99_ms": [
+        41.51822376251221,
+        41.533071784973146,
+        41.51059883117676
       ],
       "restarts": 3,
       "source_tokens_per_rank": 16384,
@@ -2175,10 +4304,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 26952930304,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.455922367516905e-05,
       "max_restart_p50_ms": 82.6739501953125,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 384,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 82.67337417602539,
+      "median_restart_p95_ms": 82.76954879760741,
+      "median_restart_p99_ms": 82.8819500732422,
       "median_weight_migration_ms": 84.84371285885572,
       "min_restart_p50_ms": 82.6338882446289,
       "node_label": "PRO5000-B",
@@ -2186,6 +4321,16 @@
         82.6338882446289,
         82.6739501953125,
         82.67337417602539
+      ],
+      "restart_p95_ms": [
+        82.74833221435547,
+        82.76954879760741,
+        82.78821754455566
+      ],
+      "restart_p99_ms": [
+        82.8819500732422,
+        82.82246459960938,
+        82.90511047363282
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -2199,10 +4344,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 36849268736,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.3834418243495747e-05,
       "max_restart_p50_ms": 82.6358871459961,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 378,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 82.63051223754883,
+      "median_restart_p95_ms": 82.73381271362305,
+      "median_restart_p99_ms": 82.80725578308106,
       "median_weight_migration_ms": 78.22687877342105,
       "min_restart_p50_ms": 82.61644744873047,
       "node_label": "PRO5000-B",
@@ -2210,6 +4361,16 @@
         82.61644744873047,
         82.6358871459961,
         82.63051223754883
+      ],
+      "restart_p95_ms": [
+        82.73381271362305,
+        82.75069770812989,
+        82.72395057678223
+      ],
+      "restart_p99_ms": [
+        82.82193359375,
+        82.80120834350585,
+        82.80725578308106
       ],
       "restarts": 3,
       "source_tokens_per_rank": 32768,
@@ -2223,10 +4384,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 35315610112,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4125611162162386e-05,
       "max_restart_p50_ms": 116.02561950683594,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 384,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 116.01950454711914,
+      "median_restart_p95_ms": 116.1513729095459,
+      "median_restart_p99_ms": 116.22922401428222,
       "median_weight_migration_ms": 82.62292202562094,
       "min_restart_p50_ms": 116.00352096557617,
       "node_label": "PRO5000-B",
@@ -2234,6 +4401,16 @@
         116.00352096557617,
         116.01950454711914,
         116.02561950683594
+      ],
+      "restart_p95_ms": [
+        116.10888175964355,
+        116.1513729095459,
+        116.16136474609375
+      ],
+      "restart_p99_ms": [
+        116.21344848632812,
+        116.24962707519532,
+        116.22922401428222
       ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
@@ -2247,10 +4424,16 @@
       "all_inline_correct": true,
       "backend": "sonic",
       "max_peak_allocated_bytes": 49232718336,
+      "max_peak_reserved_bytes": null,
       "max_relative_l2": 2.4011620553210378e-05,
       "max_restart_p50_ms": 116.05344009399414,
+      "max_timed_allocator_delta": {},
       "median_moved_experts": 378,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
       "median_restart_p50_ms": 116.04889678955078,
+      "median_restart_p95_ms": 116.17564544677734,
+      "median_restart_p99_ms": 116.21699905395508,
       "median_weight_migration_ms": 81.38287020847201,
       "min_restart_p50_ms": 116.04230499267578,
       "node_label": "PRO5000-B",
@@ -2259,6 +4442,16 @@
         116.04889678955078,
         116.05344009399414
       ],
+      "restart_p95_ms": [
+        116.17564544677734,
+        116.16785469055176,
+        116.18433265686035
+      ],
+      "restart_p99_ms": [
+        116.21306678771973,
+        116.21699905395508,
+        116.26131813049317
+      ],
       "restarts": 3,
       "source_tokens_per_rank": 46080,
       "timing_level": "E0_prequantized",
@@ -2266,6 +4459,335 @@
       "trace": "m46080_segment_aligned",
       "trace_sha256": "55284b6c5c6a74f6005e749f7af0532d2f42a6361ec8dbd0a7a92e74be93787e",
       "variant": "fused_segmented_greedy"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 8554219008,
+      "max_peak_reserved_bytes": 8845787136,
+      "max_relative_l2": 2.6214951503789052e-05,
+      "max_restart_p50_ms": 13.90830373764038,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 13.907599925994873,
+      "median_restart_p95_ms": 13.926002740859985,
+      "median_restart_p99_ms": 13.941596565246583,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 13.907376289367676,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        13.907599925994873,
+        13.90830373764038,
+        13.907376289367676
+      ],
+      "restart_p95_ms": [
+        13.924356508255006,
+        13.929197978973388,
+        13.926002740859985
+      ],
+      "restart_p99_ms": [
+        13.941596565246583,
+        13.975985641479507,
+        13.932727088928223
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 8192,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m8192_balanced",
+      "trace_sha256": "54ca9b5a5929b6fd8d7738fc7f1b9c7e59d907be46947d41d74116a42629e2e4",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 11772626432,
+      "max_peak_reserved_bytes": 11951669248,
+      "max_relative_l2": 2.4661170755280182e-05,
+      "max_restart_p50_ms": 27.720975875854492,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 27.720687866210938,
+      "median_restart_p95_ms": 27.748973655700684,
+      "median_restart_p99_ms": 27.760975570678713,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 27.719807624816895,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        27.719807624816895,
+        27.720975875854492,
+        27.720687866210938
+      ],
+      "restart_p95_ms": [
+        27.750833892822264,
+        27.748973655700684,
+        27.748212814331055
+      ],
+      "restart_p99_ms": [
+        27.7623486328125,
+        27.75696210861206,
+        27.760975570678713
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_balanced",
+      "trace_sha256": "100453edcee8eb0735a6fa72725554c089420e607c4a3c20310900267a0eabf0",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 12949788672,
+      "max_peak_reserved_bytes": 13920894976,
+      "max_relative_l2": 2.535799467295874e-05,
+      "max_restart_p50_ms": 33.93620681762695,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 33.899600982666016,
+      "median_restart_p95_ms": 33.9709457397461,
+      "median_restart_p99_ms": 34.01068271636963,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 33.86622428894043,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        33.86622428894043,
+        33.899600982666016,
+        33.93620681762695
+      ],
+      "restart_p95_ms": [
+        33.91839485168457,
+        33.9709457397461,
+        33.9760160446167
+      ],
+      "restart_p99_ms": [
+        33.93712066650391,
+        34.01068271636963,
+        34.02750461578369
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_persistent_single_hot",
+      "trace_sha256": "b40404326e36e57f5936221383bab2761b1301df21f773b02398e683f07a2c2c",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 18208392704,
+      "max_peak_reserved_bytes": 18425577472,
+      "max_relative_l2": 2.559333915996831e-05,
+      "max_restart_p50_ms": 55.38768005371094,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 55.37966537475586,
+      "median_restart_p95_ms": 55.429512405395506,
+      "median_restart_p99_ms": 55.47689525604248,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 55.37499237060547,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        55.38768005371094,
+        55.37499237060547,
+        55.37966537475586
+      ],
+      "restart_p95_ms": [
+        55.43269023895264,
+        55.429512405395506,
+        55.42940845489502
+      ],
+      "restart_p99_ms": [
+        55.47689525604248,
+        55.485211486816404,
+        55.47368812561035
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 32768,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m32768_balanced",
+      "trace_sha256": "e0a9718dc228f05c5eeb3dcbe32e7795ec2b160dcfa6c1dd3ad2e52557376a52",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 23441647104,
+      "max_peak_reserved_bytes": 23920115712,
+      "max_relative_l2": 2.429417691018898e-05,
+      "max_restart_p50_ms": 77.82345581054688,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 77.81934356689453,
+      "median_restart_p95_ms": 77.85974426269532,
+      "median_restart_p99_ms": 77.89733078002931,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 77.81683349609375,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        77.81683349609375,
+        77.81934356689453,
+        77.82345581054688
+      ],
+      "restart_p95_ms": [
+        77.85871543884278,
+        77.85974426269532,
+        77.86764488220214
+      ],
+      "restart_p99_ms": [
+        77.90873512268067,
+        77.8721435546875,
+        77.89733078002931
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 46080,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m46080_balanced",
+      "trace_sha256": "c96eb4795adc55b43399869c77773faa40c25e24cfb3608c93fdd031937bd2c8",
+      "variant": "fused_segmented_transport_workspace_contiguous"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 15688310784,
+      "max_peak_reserved_bytes": 18851299328,
+      "max_relative_l2": 2.537865839258302e-05,
+      "max_restart_p50_ms": 30.44593620300293,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": null,
+      "median_replica_copy_bytes": 24330240,
+      "median_replica_preload_ms": 359.4234362244606,
+      "median_restart_p50_ms": 30.444655418395996,
+      "median_restart_p95_ms": 30.46572332382202,
+      "median_restart_p99_ms": 30.49228065490723,
+      "median_weight_migration_ms": null,
+      "min_restart_p50_ms": 30.440671920776367,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        30.440671920776367,
+        30.444655418395996,
+        30.44593620300293
+      ],
+      "restart_p95_ms": [
+        30.460358333587646,
+        30.46572332382202,
+        30.470913314819338
+      ],
+      "restart_p99_ms": [
+        30.478515396118162,
+        30.49228065490723,
+        30.52052345275879
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_persistent_single_hot",
+      "trace_sha256": "b40404326e36e57f5936221383bab2761b1301df21f773b02398e683f07a2c2c",
+      "variant": "fused_segmented_transport_workspace_contiguous_replica1"
+    },
+    {
+      "all_inline_correct": true,
+      "backend": "sonic",
+      "max_peak_allocated_bytes": 17578086400,
+      "max_peak_reserved_bytes": 19195232256,
+      "max_relative_l2": 2.4436985768261366e-05,
+      "max_restart_p50_ms": 43.44588851928711,
+      "max_timed_allocator_delta": {
+        "allocation.all.allocated": 0,
+        "allocation.all.freed": 0,
+        "num_alloc_retries": 0,
+        "num_ooms": 0,
+        "segment.all.allocated": 0,
+        "segment.all.freed": 0
+      },
+      "median_moved_experts": 400,
+      "median_replica_copy_bytes": 0,
+      "median_replica_preload_ms": 0.0,
+      "median_restart_p50_ms": 40.57907295227051,
+      "median_restart_p95_ms": 40.649695777893065,
+      "median_restart_p99_ms": 40.68102108001709,
+      "median_weight_migration_ms": 96.6199659742415,
+      "min_restart_p50_ms": 40.54777526855469,
+      "node_label": "PRO5000-B",
+      "restart_p50_ms": [
+        40.54777526855469,
+        43.44588851928711,
+        40.57907295227051
+      ],
+      "restart_p95_ms": [
+        40.62110633850098,
+        43.682257080078124,
+        40.649695777893065
+      ],
+      "restart_p99_ms": [
+        40.68102108001709,
+        43.76865531921386,
+        40.67357955932617
+      ],
+      "restarts": 3,
+      "source_tokens_per_rank": 16384,
+      "timing_level": "E0_prequantized",
+      "topology": "same_numa",
+      "trace": "m16384_persistent_single_hot",
+      "trace_sha256": "b40404326e36e57f5936221383bab2761b1301df21f773b02398e683f07a2c2c",
+      "variant": "fused_segmented_transport_workspace_greedy"
     }
   ]
 }

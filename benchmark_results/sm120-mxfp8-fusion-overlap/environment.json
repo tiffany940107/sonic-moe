@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "platform": {
+    "public_node_labels": ["PRO5000-A", "PRO5000-B"],
+    "gpu_architecture": "SM120",
+    "interconnect": "PCIe, no NVLink",
+    "topology_classes": ["same_numa", "cross_numa_2plus2"],
+    "ep_world_size": 4
+  },
+  "runtime": {
+    "driver_kernel_version": "580.95.05",
+    "cuda_forward_compat_version": "595.58.03",
+    "cuda_toolkit": "13.2.78",
+    "blockscale_torch": "2.12.0a0+5aff392",
+    "python": "3.12"
+  },
+  "containers": {
+    "sonic": "moe-sm120-sonic-mxfp8:sonic-7396f3e-quack-c8ec317",
+    "blockscale": "nvcr.io/nvidia/pytorch:26.05-py3",
+    "megamoe": "moe-sm120-megamoe-hybrid:5016d822"
+  },
+  "profilers": {
+    "nsight_systems": "2025.3.2",
+    "ncu_raw_artifact_publication": false
+  },
+  "measurement_policy": {
+    "warmup_iterations": 20,
+    "timed_iterations": 100,
+    "independent_process_restarts": 3,
+    "rank_aggregation": "maximum of four rank CUDA-event intervals",
+    "restart_aggregation": "median of restart percentiles",
+    "persistence_mode": "enabled",
+    "power_limit_w": 350,
+    "default_power_limit_w": 350,
+    "maximum_sm_clock_mhz": 3090,
+    "maximum_memory_clock_mhz": 14001,
+    "application_clocks_locked": false,
+    "clock_note": "Shared nodes were not administratively clock-locked; all paired comparisons use the same power/clock policy and independent restarts."
+  },
+  "privacy": {
+    "hostnames_recorded": false,
+    "addresses_recorded": false,
+    "gpu_ordinals_recorded": false,
+    "gpu_uuid_recorded": false,
+    "pci_bdf_recorded": false
+  }
+}

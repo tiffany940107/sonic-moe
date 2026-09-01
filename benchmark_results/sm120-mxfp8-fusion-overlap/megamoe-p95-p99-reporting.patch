@@ -1,0 +1,30 @@
+diff --git a/moe_sm120_mxfp8_split/mega_runner.py b/moe_sm120_mxfp8_split/mega_runner.py
+--- a/moe_sm120_mxfp8_split/mega_runner.py
++++ b/moe_sm120_mxfp8_split/mega_runner.py
+@@ -1793,6 +1793,8 @@
+                     f"p10={float(np.percentile(critical_us, 10)):.2f} us "
+                     f"p50={float(np.median(critical_us)):.2f} us "
+                     f"p90={float(np.percentile(critical_us, 90)):.2f} us "
++                    f"p95={float(np.percentile(critical_us, 95)):.2f} us "
++                    f"p99={float(np.percentile(critical_us, 99)):.2f} us "
+                     f"max={float(np.max(critical_us)):.2f} us"
+                 )
+ 
+@@ -3829,6 +3831,8 @@
+                     f"p10={float(np.percentile(critical_us, 10)):.2f} us "
+                     f"p50={float(np.median(critical_us)):.2f} us "
+                     f"p90={float(np.percentile(critical_us, 90)):.2f} us "
++                    f"p95={float(np.percentile(critical_us, 95)):.2f} us "
++                    f"p99={float(np.percentile(critical_us, 99)):.2f} us "
+                     f"max={float(np.max(critical_us)):.2f} us"
+                 )
+             self._report_phase_timings()
+@@ -3861,6 +3865,8 @@
+                         f"p10={float(np.percentile(global_critical_us, 10)):.2f} us "
+                         f"p50={float(np.median(global_critical_us)):.2f} us "
+                         f"p90={float(np.percentile(global_critical_us, 90)):.2f} us "
++                        f"p95={float(np.percentile(global_critical_us, 95)):.2f} us "
++                        f"p99={float(np.percentile(global_critical_us, 99)):.2f} us "
+                         f"max={float(np.max(global_critical_us)):.2f} us"
+                     )
+             return

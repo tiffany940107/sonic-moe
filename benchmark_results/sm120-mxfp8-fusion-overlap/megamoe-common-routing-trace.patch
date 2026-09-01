@@ -1,0 +1,124 @@
+diff --git a/moe_sm120_mxfp8_split/mega_runner.py b/moe_sm120_mxfp8_split/mega_runner.py
+index fbb60b4..0901001 100644
+--- a/moe_sm120_mxfp8_split/mega_runner.py
++++ b/moe_sm120_mxfp8_split/mega_runner.py
+@@ -49,5 +49,6 @@ from __future__ import annotations
+ 
+ import argparse
++import hashlib
+ import math
+ import os
+ import sys
+@@ -1078,6 +1079,7 @@ class MegaMoETester:
+         self._perf_warmup = 1
+         self._perf_iters = 1
+         self._dynamic_route_replays = 0
++        self._routing_trace_path: Optional[str] = None
+         self._transport_replay_validation = False
+         self._verify_replay_bit_determinism = False
+         self._phase_timing_enabled = (
+@@ -1106,6 +1108,14 @@ class MegaMoETester:
+         self._perf_warmup = max(0, int(warmup))
+         self._perf_iters = max(1, int(iters))
+ 
++    def set_routing_trace(self, path: str) -> None:
++        """Use one common rank-major route/weight trace for this run."""
++        if not path:
++            return
++        if self._dynamic_route_replays:
++            raise ValueError("a fixed routing trace is incompatible with dynamic replays")
++        self._routing_trace_path = path
++
+     def set_dynamic_route_replays(self, replays: int) -> None:
+         """Change the GPU-resident top-k route before every timed replay.
+ 
+@@ -1395,7 +1405,47 @@ class MegaMoETester:
+         ).reshape(num_ranks, num_tokens_per_rank, hidden_sf_cols)
+ 
+         # ---- Routing table.
+-        if problem.route_distribution == "balanced":
++        trace_weights = None
++        if self._routing_trace_path:
++            trace_path = os.path.abspath(self._routing_trace_path)
++            payload = torch.load(trace_path, map_location="cpu", weights_only=True)
++            if not isinstance(payload, dict) or "expert_ids" not in payload:
++                raise ValueError("routing trace must be a dict containing expert_ids")
++            expected = (num_ranks * num_tokens_per_rank, num_topk)
++            trace_ids = torch.as_tensor(payload["expert_ids"], dtype=torch.int64)
++            if tuple(trace_ids.shape) != expected:
++                raise ValueError(
++                    f"routing trace expert_ids shape {tuple(trace_ids.shape)} != {expected}"
++                )
++            if int(trace_ids.min()) < 0 or int(trace_ids.max()) >= problem.num_total_experts:
++                raise ValueError("routing trace expert ID is out of range")
++            ordered = trace_ids.sort(dim=1).values
++            if bool((ordered[:, 1:] == ordered[:, :-1]).any()):
++                raise ValueError("routing trace has duplicate expert within a token")
++            trace_weights = torch.as_tensor(payload.get("weights"), dtype=torch.float32)
++            if tuple(trace_weights.shape) != expected:
++                raise ValueError(
++                    f"routing trace weights shape {tuple(trace_weights.shape)} != {expected}"
++                )
++            if not bool(torch.isfinite(trace_weights).all()) or bool((trace_weights < 0).any()):
++                raise ValueError("routing trace weights must be finite and non-negative")
++            if not torch.allclose(
++                trace_weights.sum(dim=1), torch.ones(expected[0]), atol=2e-6, rtol=0
++            ):
++                raise ValueError("routing trace weights must sum to one per token")
++            topk_idx_np = trace_ids.reshape(
++                num_ranks, num_tokens_per_rank, num_topk
++            ).numpy()
++            trace_weights = trace_weights.reshape(
++                num_ranks, num_tokens_per_rank, num_topk
++            ).cuda()
++            if self.rank == 0:
++                digest = hashlib.sha256(open(trace_path, "rb").read()).hexdigest()
++                print(
++                    f"[routing trace] file={os.path.basename(trace_path)} sha256={digest}",
++                    flush=True,
++                )
++        elif problem.route_distribution == "balanced":
+             topk_idx_np = _generate_topk_idx_balanced(
+                 num_ranks, num_tokens_per_rank, num_topk,
+                 problem.num_total_experts, rng,
+@@ -1413,9 +1463,13 @@ class MegaMoETester:
+                 problem.num_total_experts,
+                 rng,
+             )
+-        topk_weights = _generate_topk_weights(
+-            num_ranks, num_tokens_per_rank, num_topk, self._torch_cuda_rng,
+-        )
++        topk_weights = (
++            trace_weights
++            if trace_weights is not None
++            else _generate_topk_weights(
++                num_ranks, num_tokens_per_rank, num_topk, self._torch_cuda_rng,
++            )
++        )
+         if self.rank == 0:
+             _print_remote_rank_comm_matrices(
+                 topk_idx_np, num_ranks, problem.num_total_experts,
+@@ -5087,6 +5141,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
+         help="Zipf exponent for --route_distribution power_law; 1.0 = classic "
+              "Zipf, larger = more skewed, 0 = uniform.",
+     )
++    parser.add_argument(
++        "--routing_trace",
++        type=str,
++        default="",
++        help="Common rank-major .pt dict with expert_ids and normalized weights.",
++    )
+     parser.add_argument(
+         "--gate_up_clamp", type=float, default=None,
+         help="DeepSeek-V4 swiglu_limit: asymmetric clamp on the real gate/up "
+@@ -5518,6 +5578,10 @@ def main() -> int:
+         parallel_context=parallel_context,
+         split_launch=args.split_launch,
+     )
++    if args.routing_trace:
++        if args.dynamic_route_replays:
++            parser.error("--routing_trace is incompatible with --dynamic_route_replays")
++        tester.set_routing_trace(args.routing_trace)
+     tester.set_torch_profiler_enabled(args.use_torch_profiler)
+     tester.set_cuda_event_timing_enabled(args.use_cuda_events)
+     tester.set_perf_iters(args.perf_warmup, args.perf_iters)

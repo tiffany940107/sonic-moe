@@ -1,0 +1,253 @@
+{
+  "audit": "0902_completion",
+  "checks": [
+    {
+      "detail": "groups=107",
+      "name": "all_admitted_groups_have_three_restarts",
+      "passed": true
+    },
+    {
+      "detail": "no admitted Sonic/block-scale record has a failed C4 gate",
+      "name": "all_inline_correctness_gates_pass",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_baseline_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_transport_workspace_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_blockscale_groupwise_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_baseline_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_transport_workspace_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_blockscale_groupwise_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_baseline_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_transport_workspace_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_blockscale_groupwise_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_baseline_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_sonic_fused_segmented_transport_workspace_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-A_blockscale_groupwise_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "reporting-only p95/p99 patch, three restarts",
+      "name": "megamoe_tail_percentiles_PRO5000-A_8192",
+      "passed": true
+    },
+    {
+      "detail": "reporting-only p95/p99 patch, three restarts",
+      "name": "megamoe_tail_percentiles_PRO5000-A_16384",
+      "passed": true
+    },
+    {
+      "detail": "unsupported is explicit and has no admitted latency",
+      "name": "megamoe_signed_extent_status_PRO5000-A_32768",
+      "passed": true
+    },
+    {
+      "detail": "unsupported is explicit and has no admitted latency",
+      "name": "megamoe_signed_extent_status_PRO5000-A_46080",
+      "passed": true
+    },
+    {
+      "detail": "no same-NUMA substitution",
+      "name": "cross_numa_resource_status_PRO5000-A",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_baseline_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_transport_workspace_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_blockscale_groupwise_contiguous_8192",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_baseline_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_transport_workspace_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_blockscale_groupwise_contiguous_16384",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_baseline_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_transport_workspace_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_blockscale_groupwise_contiguous_32768",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_baseline_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_sonic_fused_segmented_transport_workspace_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "required balanced same-NUMA result",
+      "name": "balanced_PRO5000-B_blockscale_groupwise_contiguous_46080",
+      "passed": true
+    },
+    {
+      "detail": "reporting-only p95/p99 patch, three restarts",
+      "name": "megamoe_tail_percentiles_PRO5000-B_8192",
+      "passed": true
+    },
+    {
+      "detail": "reporting-only p95/p99 patch, three restarts",
+      "name": "megamoe_tail_percentiles_PRO5000-B_16384",
+      "passed": true
+    },
+    {
+      "detail": "unsupported is explicit and has no admitted latency",
+      "name": "megamoe_signed_extent_status_PRO5000-B_32768",
+      "passed": true
+    },
+    {
+      "detail": "unsupported is explicit and has no admitted latency",
+      "name": "megamoe_signed_extent_status_PRO5000-B_46080",
+      "passed": true
+    },
+    {
+      "detail": "no same-NUMA substitution",
+      "name": "cross_numa_resource_status_PRO5000-B",
+      "passed": true
+    },
+    {
+      "detail": "local_groups=4",
+      "name": "k0_k1_both_nodes_three_restarts",
+      "passed": true
+    },
+    {
+      "detail": "caller-owned local workspaces",
+      "name": "k1_zero_timed_allocator_activity",
+      "passed": true
+    },
+    {
+      "detail": "contiguous, whole-expert migration, and replica split",
+      "name": "single_hot_sonic_control_matrix",
+      "passed": true
+    },
+    {
+      "detail": "same common trace",
+      "name": "single_hot_megamoe_three_restarts",
+      "passed": true
+    },
+    {
+      "detail": "mismatched=[]",
+      "name": "common_trace_hashes_match_across_backends",
+      "passed": true
+    }
+  ],
+  "failed_checks": [],
+  "passed": true,
+  "schema_version": 1
+}

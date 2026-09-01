@@ -32,10 +32,16 @@ python_bin=${PYTHON_BIN:-python}
 
 run_case() {
   local tokens=$1 scenario=$2 data_path=$3 placement=$4 restart=$5
-  local variant=${data_path}_${placement}
+  local replica_slots=${6:-0}
+  local replica_suffix=
+  if (( replica_slots > 0 )); then replica_suffix=_replica${replica_slots}; fi
+  local variant=${data_path}_transport_workspace_${placement}${replica_suffix}
   local output=${result_dir}/raw/m${tokens}_${scenario}_${variant}_r${restart}.jsonl
-  local migration_args=()
+  local migration_args=() replica_args=()
   if [[ ${placement} == greedy ]]; then migration_args+=(--real-weight-migration); fi
+  if (( replica_slots > 0 )); then
+    replica_args+=(--experimental-replica-slots "${replica_slots}")
+  fi
   "${python_bin}" -m torch.distributed.run --standalone --nproc-per-node=4 \
     benchmarks/mxfp8-ep4-e2e.py \
     --tokens "${tokens}" --top-k 32 --experts 512 --hidden 2048 \
@@ -43,10 +49,11 @@ run_case() {
     --routing-trace "${result_dir}/traces/m${tokens}_${scenario}.pt" \
     --placement "${placement}" --activation-transport mxfp8 \
     --data-path "${data_path}" --prequantized-source \
+    --implementation-label transport_workspace \
     --warmup 20 --iters 100 --atomic-variance-runs 5 \
     --node-label "${node_label}" --topology-label "${topology}" \
     --run-label "formal_r${restart}" --output "${output}" \
-    "${migration_args[@]}"
+    "${migration_args[@]}" "${replica_args[@]}"
 }
 
 if [[ ${mode} == balanced || ${mode} == all ]]; then
@@ -63,6 +70,7 @@ unbalanced_cases=(
   "8192 rank_r1.227" "8192 segment_aligned"
   "16384 rank_r1.106" "16384 rank_r1.227" "16384 rank_r1.698"
   "16384 segment_aligned" "16384 segment_permuted" "16384 joint_aligned_max"
+  "16384 persistent_single_hot"
   "32768 rank_r1.227" "32768 segment_aligned"
   "46080 rank_r1.227" "46080 segment_aligned"
 )
@@ -80,5 +88,8 @@ if [[ ${mode} == eplb || ${mode} == all ]]; then
     for restart in 1 2 3; do
       run_case "${tokens}" "${scenario}" fused_segmented greedy "${restart}"
     done
+  done
+  for restart in 1 2 3; do
+    run_case 16384 persistent_single_hot fused_segmented contiguous "${restart}" 1
   done
 fi

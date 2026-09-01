@@ -1,0 +1,150 @@
+{
+  "amortized": [
+    {
+      "amortized_ms": 389.868091,
+      "beats_unoptimized": false,
+      "stable_steps": 1
+    },
+    {
+      "amortized_ms": 210.156373,
+      "beats_unoptimized": false,
+      "stable_steps": 2
+    },
+    {
+      "amortized_ms": 120.30051399999999,
+      "beats_unoptimized": false,
+      "stable_steps": 4
+    },
+    {
+      "amortized_ms": 75.3725845,
+      "beats_unoptimized": false,
+      "stable_steps": 8
+    },
+    {
+      "amortized_ms": 52.90861975,
+      "beats_unoptimized": false,
+      "stable_steps": 16
+    },
+    {
+      "amortized_ms": 41.676637375,
+      "beats_unoptimized": false,
+      "stable_steps": 32
+    },
+    {
+      "amortized_ms": 36.0606461875,
+      "beats_unoptimized": false,
+      "stable_steps": 64
+    },
+    {
+      "amortized_ms": 33.25265059375,
+      "beats_unoptimized": true,
+      "stable_steps": 128
+    }
+  ],
+  "analysis": "windowed_static_eplb",
+  "controller": {
+    "amortization_horizon_steps": 160,
+    "apply_threshold": 1.3,
+    "migration_limit": 512,
+    "minimum_saving_ms": 0.05,
+    "observe_threshold": 1.15,
+    "persistence_windows": 2,
+    "remote_record_cost_ms": 0.0,
+    "replica_hot_expert_ratio": 4.0,
+    "replica_max_copies": 4,
+    "replica_slots_per_rank": 1,
+    "replica_threshold": 1.5,
+    "update_interval": 1,
+    "window": 1
+  },
+  "experimental_replica_enabled": true,
+  "measured_break_even_steps": 104.03156402444507,
+  "measured_inputs": {
+    "optimized_step_ms": 30.444655,
+    "reconfiguration_ms": 359.423436,
+    "unoptimized_step_ms": 33.899601
+  },
+  "schema_version": 1,
+  "timeline": [
+    {
+      "action": "none",
+      "applied": false,
+      "break_even_steps": null,
+      "changed_expert_count": 0,
+      "changed_experts": [],
+      "experimental": false,
+      "hot_expert_ratio": 16.0,
+      "predicted_after": 570412,
+      "predicted_before": 570488,
+      "predicted_candidate_ms": 33.899601,
+      "predicted_saving_ms": 0.0,
+      "profile": "single_hot",
+      "rank_ratio": 1.0881195068359375,
+      "reason": "await_persistence",
+      "remote_records_after": 94743,
+      "remote_records_before": 94743,
+      "route_map_version": 0,
+      "step": 1
+    },
+    {
+      "action": "experimental_replica",
+      "applied": false,
+      "break_even_steps": 133.8907406439734,
+      "changed_expert_count": 0,
+      "changed_experts": [],
+      "experimental": true,
+      "hot_expert_ratio": 16.0,
+      "predicted_after": 525312,
+      "predicted_before": 570488,
+      "predicted_candidate_ms": 33.899601,
+      "predicted_saving_ms": 2.6844532659337266,
+      "profile": "single_hot",
+      "rank_ratio": 1.0881195068359375,
+      "reason": "prefer_experimental_replica",
+      "remote_records_after": 94743,
+      "remote_records_before": 94743,
+      "route_map_version": 0,
+      "step": 2
+    },
+    {
+      "action": "experimental_replica",
+      "applied": false,
+      "break_even_steps": 133.8907406439734,
+      "changed_expert_count": 0,
+      "changed_experts": [],
+      "experimental": true,
+      "hot_expert_ratio": 16.0,
+      "predicted_after": 525312,
+      "predicted_before": 570488,
+      "predicted_candidate_ms": 33.899601,
+      "predicted_saving_ms": 2.6844532659337266,
+      "profile": "single_hot",
+      "rank_ratio": 1.0881195068359375,
+      "reason": "prefer_experimental_replica",
+      "remote_records_after": 94743,
+      "remote_records_before": 94743,
+      "route_map_version": 0,
+      "step": 3
+    },
+    {
+      "action": "experimental_replica",
+      "applied": false,
+      "break_even_steps": 133.8907406439734,
+      "changed_expert_count": 0,
+      "changed_experts": [],
+      "experimental": true,
+      "hot_expert_ratio": 16.0,
+      "predicted_after": 525312,
+      "predicted_before": 570488,
+      "predicted_candidate_ms": 33.899601,
+      "predicted_saving_ms": 2.6844532659337266,
+      "profile": "single_hot",
+      "rank_ratio": 1.0881195068359375,
+      "reason": "prefer_experimental_replica",
+      "remote_records_after": 94743,
+      "remote_records_before": 94743,
+      "route_map_version": 0,
+      "step": 4
+    }
+  ]
+}

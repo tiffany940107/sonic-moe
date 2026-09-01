@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "campaign": "0902_sonic_moe_fusion_optimization",
+  "baseline": {
+    "sonic": {
+      "remote": "https://github.com/tiffany940107/sonic-moe.git",
+      "branch": "feature/sm120-mxfp8-eplb-runtime",
+      "commit": "013f1726a4590b5ac861df30004762aa9515025e"
+    },
+    "quack": {
+      "remote": "https://github.com/tiffany940107/quack.git",
+      "branch": "feature/sm120-mxfp8-varlen-epilogue",
+      "commit": "c87c9d1d100b4a2cc56f90099c0b9001d9ae645e"
+    },
+    "blockscale": {
+      "remote": "https://github.com/CarstyYou/sm120_block_scale_gemm.git",
+      "branch": "main",
+      "commit": "06a2b245634381af8f297f7f415862a6e5bc3e99",
+      "gran_k": 32
+    },
+    "megamoe": {
+      "remote": "https://gitlab-master.nvidia.com/bangyus/cutedsl_megamoe.git",
+      "branch": "hanyueh/sm120-mxfp8-split",
+      "commit": "8512aed522e14e4ee67e08cb54533ab7ec038a92",
+      "upstream_topk_weight_fix": true,
+      "clean_worktree": true
+    }
+  },
+  "development": {
+    "sonic_branch": "feature/sm120-mxfp8-fusion-overlap",
+    "sonic_code_commit": "31ab794b013a729e219df11a903ee6e50206cdcd",
+    "sonic_core_fusion_commit": "bb79f10ddb788c4f044a8b6576c82d51d2ac85df",
+    "sonic_transport_workspace_commit": "06b096711d1fd40972339f713a922b2b9075f141",
+    "sonic_formal_k0_k1_commit": "685dbd46d116840480d45a9d8288375805e3f737",
+    "sonic_isolated_hot_controller_commit": "31ab794b013a729e219df11a903ee6e50206cdcd",
+    "quack_branch": "feature/sm120-mxfp8-fused-route-reduce",
+    "quack_code_commit": "d38dd360555bd4b2a8b35fd78a6c6b5e5ebfd0de"
+  },
+  "benchmark_adapters": {
+    "megamoe_common_trace_patch_sha256": "1a0a7d567caac46bb0cdacedb7b475982e854fe6626829d5014031c811638eac",
+    "megamoe_p95_p99_reporting_patch_sha256": "ee46d22e8b29b2d2c9a346c6abf781413db80fe8d7c721aebcae05db077319fe",
+    "megamoe_reporting_patch_changes_kernel": false
+  },
+  "privacy": "No address, hostname, GPU ordinal, UUID, or PCI identifier is stored."
+}

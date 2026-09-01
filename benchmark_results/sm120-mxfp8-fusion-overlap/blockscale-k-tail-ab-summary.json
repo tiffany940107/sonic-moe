@@ -1,0 +1,39 @@
+{
+  "api_active_byte_check": {
+    "new": {
+      "compute_sanitizer_errors": 0,
+      "qdata_bad_bytes": 0,
+      "scale_bad_bytes": 0,
+      "status": "passed"
+    },
+    "old": {
+      "compute_sanitizer_errors": 0,
+      "qdata_bad_bytes": 0,
+      "scale_bad_bytes": 0,
+      "status": "insufficient_to_detect_logical_overwrite"
+    }
+  },
+  "benchmark": "blockscale_mxfp8_moe_k1280_tail_commit_ab",
+  "direct_guard": {
+    "launched_scale_rows": 12,
+    "new_guard_bad_int32": 0,
+    "old_guard_bad_int32": 1804,
+    "valid_scale_rows": 10
+  },
+  "new_commit": "06a2b245634381af8f297f7f415862a6e5bc3e99",
+  "new_latency_ms": {
+    "iterations": 100,
+    "p50": 0.011776000261306763,
+    "p95": 0.01235199999064207,
+    "p99": 0.01696864061057568,
+    "warmup": 20
+  },
+  "old_commit": "0da85e635caaf727b7f6e27fa78afdcc2288903d",
+  "schema_version": 1,
+  "shape": {
+    "expert_segments": [0, 1, 127, 128, 129, 517],
+    "gran_k": 32,
+    "k": 1280
+  },
+  "status": "regression_reproduced_and_fix_verified"
+}

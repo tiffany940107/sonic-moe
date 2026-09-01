@@ -1,15 +1,16 @@
 {
   "schema_version": 1,
   "gpu_architecture": "SM120",
-  "passed": 19,
+  "passed": 23,
   "failed": 0,
-  "elapsed_seconds": 15.22,
+  "elapsed_seconds": 15.28,
   "suites": [
     "test_mxfp8",
     "test_mxfp8_route_pack",
     "test_mxfp8_weighted_reduce",
-    "test_ep4_eplb"
+    "test_ep4_eplb",
+    "test_ep4_transport_workspace"
   ],
-  "sonic_commit": "bb79f10ddb788c4f044a8b6576c82d51d2ac85df",
+  "sonic_commit": "31ab794b013a729e219df11a903ee6e50206cdcd",
   "quack_commit": "d38dd360555bd4b2a8b35fd78a6c6b5e5ebfd0de"
 }
