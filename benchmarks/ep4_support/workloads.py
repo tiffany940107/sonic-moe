@@ -143,6 +143,21 @@ def balanced_counts(tokens: int) -> torch.Tensor:
     )
 
 
+def persistent_single_hot_counts(tokens: int) -> torch.Tensor:
+    """One expert is selected by every token; all other pairs are balanced."""
+    if tokens <= 0:
+        raise ValueError("tokens must be positive")
+    counts = torch.empty(EXPERTS, dtype=torch.int64)
+    counts[0] = tokens
+    counts[1:] = torch.tensor(
+        largest_remainder(tokens * (TOP_K - 1), [1.0] * (EXPERTS - 1)),
+        dtype=torch.int64,
+    )
+    if int(counts.sum()) != tokens * TOP_K or int(counts.max()) != tokens:
+        raise AssertionError("persistent single-hot profile is invalid")
+    return counts
+
+
 def rank_skew_counts(tokens: int, ratio: float) -> torch.Tensor:
     if not 1.0 <= ratio <= EP_SIZE:
         raise ValueError("rank max/mean ratio must be in [1, ep_size]")
@@ -198,6 +213,8 @@ def make_trace(
             permutation = torch.randperm(EXPERTS, generator=generator)
             counts = torch.empty_like(segment)
             counts[permutation] = segment
+        elif scenario == "persistent_single_hot":
+            counts = persistent_single_hot_counts(tokens)
         elif scenario.startswith("rank_r"):
             counts = rank_skew_counts(tokens, float(scenario.removeprefix("rank_r")))
         elif scenario == "joint_aligned_max":
@@ -254,6 +271,11 @@ def make_trace(
             if scenario.startswith("segment_") or scenario == "joint_aligned_max"
             else None
         ),
+        "persistent_single_hot_expert": 0
+        if scenario == "persistent_single_hot"
+        else None,
+        "post_ep_hot_expert_over_mean": float(global_counts.max())
+        / float(global_counts.to(torch.float64).mean()),
     }
     return expert_ids, weights, metadata
 
@@ -284,6 +306,7 @@ def scenarios_for(tokens: int) -> list[str]:
             "balanced",
             "segment_aligned",
             "segment_permuted",
+            "persistent_single_hot",
             *(f"rank_r{ratio:g}" for ratio in RANK_RATIOS),
             "joint_aligned_max",
         ]
@@ -299,6 +322,7 @@ __all__ = [
     "TOP_K",
     "base_segment_profile",
     "make_trace",
+    "persistent_single_hot_counts",
     "scaled_segment_profile",
     "scenarios_for",
     "validate_trace",

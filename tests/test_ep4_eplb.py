@@ -26,6 +26,7 @@ from ep4_support.workloads import (
     TOKEN_WORKLOADS,
     TOP_K,
     base_segment_profile,
+    persistent_single_hot_counts,
     scaled_segment_profile,
 )
 
@@ -47,6 +48,15 @@ def test_every_requested_token_length_has_a_conserved_scaled_profile():
         assert int(profile.sum()) == tokens * TOP_K
         assert int(profile.max()) == tokens
         assert int(profile.min()) >= 0
+
+
+def test_persistent_single_hot_profile_is_isolated_and_conserves_pairs():
+    profile = persistent_single_hot_counts(BASE_TOKENS)
+    assert profile.shape == (512,)
+    assert int(profile.sum()) == BASE_TOKENS * TOP_K
+    assert int(profile[0]) == BASE_TOKENS
+    assert int(profile[1:].max() - profile[1:].min()) <= 1
+    assert int(profile[0]) > 16 * int(profile[1:].max())
 
 
 def test_lpt_is_equal_capacity_and_reduces_straggler():

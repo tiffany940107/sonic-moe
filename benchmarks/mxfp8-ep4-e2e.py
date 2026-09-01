@@ -1030,6 +1030,15 @@ def main() -> int:
     torch.cuda.synchronize()
     dist.barrier()
 
+    allocator_stat_keys = (
+        "allocation.all.allocated",
+        "allocation.all.freed",
+        "segment.all.allocated",
+        "segment.all.freed",
+        "num_alloc_retries",
+        "num_ooms",
+    )
+    allocator_before = torch.cuda.memory_stats()
     all_stage_events = []
     all_total_events = []
     local_pairs = 0
@@ -1045,6 +1054,17 @@ def main() -> int:
     if args.cuda_profiler_capture:
         torch.cuda.profiler.stop()
     host_mean_ms = (time.perf_counter() - host_start) * 1e3 / args.iters
+    allocator_after = torch.cuda.memory_stats()
+    allocator_delta = torch.tensor(
+        [
+            int(allocator_after.get(key, 0))
+            - int(allocator_before.get(key, 0))
+            for key in allocator_stat_keys
+        ],
+        dtype=torch.int64,
+        device=device,
+    )
+    rank_max(allocator_delta)
 
     stage_local = None
     if all_stage_events:
@@ -1084,6 +1104,10 @@ def main() -> int:
     dist.all_reduce(remote_dispatch, op=dist.ReduceOp.SUM)
     peak = torch.tensor(torch.cuda.max_memory_allocated(), dtype=torch.int64, device=device)
     rank_max(peak)
+    peak_reserved = torch.tensor(
+        torch.cuda.max_memory_reserved(), dtype=torch.int64, device=device
+    )
+    rank_max(peak_reserved)
 
     if rank == 0:
         total_summary = summarize_ms(total_local.cpu().tolist())
@@ -1279,6 +1303,11 @@ def main() -> int:
             * args.top_k
             / (total_summary["p50_ms"] / 1e3),
             "peak_allocated_bytes": int(peak),
+            "peak_reserved_bytes": int(peak_reserved),
+            "timed_allocator_delta_rank_max": {
+                key: int(allocator_delta[index])
+                for index, key in enumerate(allocator_stat_keys)
+            },
             "scope_note": (
                 "Steady-state forward excludes static EPLB planning and weight movement. "
                 "When real_weight_migration_enabled is true, this invocation performed "
