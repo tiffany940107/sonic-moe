@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import time
 from pathlib import Path
 
@@ -27,8 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--intermediate", type=int, default=1280)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iters", type=int, default=100)
+    parser.add_argument("--node-label", default="anonymous")
+    parser.add_argument("--run-label", default="")
     parser.add_argument("--output", default="")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", args.node_label):
+        parser.error("--node-label must be a privacy-safe alias")
+    return args
 
 
 def bench(fn, warmup: int, iters: int) -> dict[str, float]:
@@ -48,6 +55,7 @@ def bench(fn, warmup: int, iters: int) -> dict[str, float]:
     return {
         "p50_ms": float(values.quantile(0.50)),
         "p95_ms": float(values.quantile(0.95)),
+        "p99_ms": float(values.quantile(0.99)),
         "mean_ms": float(values.mean()),
     }
 
@@ -133,6 +141,11 @@ def main() -> int:
         "schema_version": 1,
         "benchmark": "sonic_mxfp8_workspace_cuda_graph_k0",
         "timestamp_unix": time.time(),
+        "node_label": args.node_label,
+        "run_label": args.run_label,
+        "sonic_commit": os.environ.get("SONIC_COMMIT", "unknown"),
+        "quack_commit": os.environ.get("QUACK_COMMIT", "unknown"),
+        "timing_level": "K0_native_layout_preallocated_local_mlp",
         "shape": {
             "rows": args.rows,
             "experts": args.experts,
@@ -140,6 +153,8 @@ def main() -> int:
             "intermediate": args.intermediate,
         },
         "workspace_bytes": workspace.nbytes,
+        "peak_allocated_bytes": torch.cuda.max_memory_allocated(),
+        "peak_reserved_bytes": torch.cuda.max_memory_reserved(),
         "eager": eager_stats,
         "cuda_graph_status": graph_status,
         "cuda_graph_error": graph_error,
