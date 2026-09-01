@@ -117,6 +117,79 @@ def test_windowed_controller_uses_hysteresis_and_versions_routes():
     assert decision.predicted_after < decision.predicted_before
 
 
+def test_windowed_controller_can_reject_locality_destroying_placement():
+    placement = contiguous_placement(8, 4)
+    routes = torch.tensor(
+        [
+            [[0, 1]] * 16,
+            [[0, 2]] * 16,
+            [[0, 4]] * 16,
+            [[0, 6]] * 16,
+        ],
+        dtype=torch.int64,
+    )
+    loads = torch.bincount(routes.reshape(-1), minlength=8)
+    controller = WindowedEPLB(
+        placement,
+        4,
+        window=1,
+        update_interval=1,
+        persistence_windows=1,
+        migration_limit=512,
+        observe_threshold=1.05,
+        apply_threshold=1.10,
+        minimum_saving_ms=0.0,
+    )
+    decision = controller.observe(
+        loads,
+        unoptimized_step_ms=40.0,
+        reconfiguration_ms=80.0,
+        source_token_experts=routes,
+        remote_record_cost_ms=1.0,
+    )
+    assert not decision.applied
+    assert decision.reason in {
+        "benefit_too_small",
+        "communication_cost_outweighs_compute",
+    }
+    assert decision.remote_records_after > decision.remote_records_before
+
+
+def test_windowed_controller_honors_amortization_horizon():
+    placement = contiguous_placement(8, 4)
+    routes = torch.tensor(
+        [
+            [[0, 1]] * 16,
+            [[0, 2]] * 16,
+            [[0, 4]] * 16,
+            [[0, 6]] * 16,
+        ],
+        dtype=torch.int64,
+    )
+    loads = torch.bincount(routes.reshape(-1), minlength=8)
+    controller = WindowedEPLB(
+        placement,
+        4,
+        window=1,
+        update_interval=1,
+        persistence_windows=1,
+        migration_limit=0,
+        observe_threshold=1.05,
+        apply_threshold=1.10,
+        minimum_saving_ms=0.0,
+    )
+    decision = controller.observe(
+        loads,
+        unoptimized_step_ms=40.0,
+        reconfiguration_ms=1000.0,
+        source_token_experts=routes,
+        amortization_horizon_steps=2,
+    )
+    assert not decision.applied
+    assert decision.reason == "amortization_horizon_exceeded"
+    assert decision.break_even_steps > 2
+
+
 def test_replica_recommendation_is_explicitly_opt_in():
     placement = contiguous_placement(512, 4)
     loads = torch.ones(512, dtype=torch.int64) * 100

@@ -53,12 +53,25 @@ from quack.blockscaled import BlockScaledOperand
 from sonicmoe.functional.mxfp8 import (
     MXFP8_SCALE_BLOCK_K,
     Mxfp8MoEKernelConfig,
+    allocate_mxfp8_moe_workspace,
     allocate_mxfp8_weights,
     make_varlen_m_operand,
     mxfp8_down_grouped,
+    mxfp8_down_grouped_weighted_reduce,
     mxfp8_swiglu_grouped,
+    mxfp8_swiglu_grouped_out,
     quantize_mxfp8_rows,
     quantize_varlen_m_operand,
+)
+from sonicmoe.functional.mxfp8_route_pack import (
+    allocate_mxfp8_route_pack_workspace,
+    route_pack_mxfp8,
+)
+from sonicmoe.functional.mxfp8_weighted_reduce import (
+    allocate_mxfp8_weighted_reduce_workspace,
+    hybrid_weighted_reduce_mxfp8,
+    segmented_weighted_reduce_mxfp8,
+    weighted_reduce_mxfp8,
 )
 
 STAGES = (
@@ -121,13 +134,64 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--activation-transport", choices=["mxfp8", "bf16"], default="mxfp8"
     )
+    parser.add_argument(
+        "--prequantized-source",
+        action="store_true",
+        help="E0: keep source MXFP8 values/scales outside the timed forward",
+    )
+    parser.add_argument(
+        "--data-path",
+        choices=[
+            "baseline",
+            "workspace",
+            "route_pack",
+            "fused",
+            "fused_atomic",
+            "fused_segmented",
+            "fused_hybrid",
+            "fc2_epilogue_atomic",
+        ],
+        default="baseline",
+        help=(
+            "incremental 0902 path: workspace reuses local buffers; route_pack "
+            "also replaces sort/gather/SFA pack; fused additionally uses the "
+            "single-pass FP32 weighted scatter-reduce"
+        ),
+    )
     parser.add_argument("--fc1-tile-m", type=int, choices=[128, 256], default=128)
     parser.add_argument("--fc1-tile-n", type=int, choices=[128, 256], default=128)
     parser.add_argument("--fc2-tile-m", type=int, choices=[128, 256], default=128)
     parser.add_argument("--fc2-tile-n", type=int, choices=[128, 256], default=128)
     parser.add_argument("--disable-pingpong", action="store_true")
+    parser.add_argument(
+        "--heavy-expert-first",
+        action="store_true",
+        help="schedule longer expert segments first without changing physical layout",
+    )
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iters", type=int, default=100)
+    parser.add_argument(
+        "--atomic-variance-runs",
+        type=int,
+        default=5,
+        help="untimed repeated-output audit for atomic reduction paths",
+    )
+    parser.add_argument(
+        "--reference-chunk-pairs",
+        type=int,
+        default=262144,
+        help="setup-only C4 reference chunk size; timed baseline is unchanged",
+    )
+    parser.add_argument(
+        "--nvtx",
+        action="store_true",
+        help="annotate E0 stages for Nsight Systems collection",
+    )
+    parser.add_argument(
+        "--cuda-profiler-capture",
+        action="store_true",
+        help="bracket only timed iterations for external profiler capture",
+    )
     parser.add_argument("--stability", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-label", default="")
@@ -148,6 +212,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--node-label must be a privacy-safe public alias")
     if args.migration_limit < 0:
         parser.error("--migration-limit must be non-negative")
+    if args.reference_chunk_pairs <= 0:
+        parser.error("--reference-chunk-pairs must be positive")
     if (
         args.experimental_replica_slots
         and args.placement != "contiguous"
@@ -333,13 +399,15 @@ def main() -> int:
             physical_experts += args.experimental_replica_slots
         else:
             experimental_replica_plan = None
-    x = torch.randn((args.tokens, args.hidden), dtype=torch.bfloat16, device=device)
-
     # A BF16 identity oracle checks dispatch, top-k masking, weighting, local
-    # reduction, and reverse all-to-all independently of MXFP8 numerics.
-    identity_dispatch = dispatch_deduplicated(x, dispatch_plan)
+    # reduction, and reverse all-to-all independently of MXFP8 numerics.  One
+    # scalar per token is sufficient to audit metadata and weights; using H
+    # columns here used to create a multi-GiB setup-only pair tensor on skewed
+    # long shapes.
+    identity_x = torch.randn((args.tokens, 1), dtype=torch.bfloat16, device=device)
+    identity_dispatch = dispatch_deduplicated(identity_x, dispatch_plan)
     identity_pairs = expand_and_sort(identity_dispatch, physical_experts)
-    pair_x_id, _, recv_token_id, pair_weights_id, _ = identity_pairs
+    pair_x_id, pair_expert_id, recv_token_id, pair_weights_id, _ = identity_pairs
     identity_local = torch.zeros_like(identity_dispatch.x)
     identity_local.index_add_(
         0, recv_token_id, pair_x_id * pair_weights_id[:, None].to(pair_x_id.dtype)
@@ -347,16 +415,18 @@ def main() -> int:
     identity_out = combine_deduplicated(identity_local, dispatch_plan, args.tokens)
     identity_error = torch.tensor(
         [
-            float((identity_out - x).abs().max()),
+            float((identity_out - identity_x).abs().max()),
             float(
-                torch.linalg.vector_norm((identity_out - x).float())
-                / torch.linalg.vector_norm(x.float())
+                torch.linalg.vector_norm((identity_out - identity_x).float())
+                / torch.linalg.vector_norm(identity_x.float())
             ),
         ],
         dtype=torch.float64,
         device=device,
     )
     rank_max(identity_error)
+    x = torch.randn((args.tokens, args.hidden), dtype=torch.bfloat16, device=device)
+    prequantized_source = quantize_mxfp8_rows(x) if args.prequantized_source else None
 
     if rank == 0:
         print(
@@ -469,6 +539,33 @@ def main() -> int:
         fc2_tile_n=args.fc2_tile_n,
         pingpong=not args.disable_pingpong,
     )
+    expert_order = None
+    if args.heavy_expert_first:
+        expert_order = torch.argsort(
+            torch.bincount(pair_expert_id, minlength=physical_experts),
+            descending=True,
+            stable=True,
+        ).to(torch.int32)
+    # The dispatch plan is static for a benchmark process, so its exact active
+    # extents are setup metadata rather than a device-to-host synchronization in
+    # the timed path.  Capacity buffers intentionally match the selected plan;
+    # alternate placement or replica correctness oracles use the baseline path.
+    active_recv_tokens = int(identity_dispatch.x.shape[0])
+    active_total_pairs = int(pair_x_id.shape[0])
+    needs_route_workspace = args.data_path in (
+        "route_pack",
+        "fused",
+        "fused_atomic",
+        "fused_segmented",
+        "fused_hybrid",
+        "fc2_epilogue_atomic",
+    )
+    # The C4 reference is produced before these potentially multi-GiB
+    # workspaces are allocated.  That keeps setup-only reference temporaries
+    # from overlapping the steady-state capacity reservation on long traces.
+    mlp_workspace = None
+    route_workspace = None
+    reduce_workspace = None
 
     def forward(
         with_events: bool = False,
@@ -476,45 +573,111 @@ def main() -> int:
         plan_override=None,
         experts_override: int | None = None,
         weights_override: tuple[BlockScaledOperand, BlockScaledOperand] | None = None,
+        data_path_override: str | None = None,
     ):
         transport_mode = transport_override or args.activation_transport
         active_plan = plan_override or dispatch_plan
         active_experts = experts_override or physical_experts
         active_w1, active_w2 = weights_override or (w1, w2)
+        data_path = data_path_override or args.data_path
+        optimized_eligible = (
+            active_plan is dispatch_plan
+            and active_experts == physical_experts
+            and active_w1 is w1
+            and active_w2 is w2
+        )
+        if data_path not in ("baseline", "reference_chunked") and not optimized_eligible:
+            data_path = "baseline"
+        use_workspace = data_path not in ("baseline", "reference_chunked")
+        use_route_pack = data_path in (
+            "route_pack",
+            "fused",
+            "fused_atomic",
+            "fused_segmented",
+            "fused_hybrid",
+            "fc2_epilogue_atomic",
+        ) and transport_mode == "mxfp8"
+        use_fused_reduce = data_path in (
+            "fused",
+            "fused_atomic",
+            "fused_segmented",
+            "fused_hybrid",
+        )
+        use_direct_fc2_reduce = data_path == "fc2_epilogue_atomic"
+        active_expert_order = (
+            expert_order if active_experts == physical_experts else None
+        )
         events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         total_start = torch.cuda.Event(enable_timing=True)
         total_end = torch.cuda.Event(enable_timing=True)
         total_start.record()
 
-        def stage(fn):
+        def stage(fn, name: str):
+            if args.nvtx:
+                torch.cuda.nvtx.range_push(name)
             if not with_events:
-                return fn()
+                try:
+                    return fn()
+                finally:
+                    if args.nvtx:
+                        torch.cuda.nvtx.range_pop()
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
             start.record()
-            value = fn()
-            end.record()
-            events.append((start, end))
-            return value
+            try:
+                value = fn()
+                end.record()
+                events.append((start, end))
+                return value
+            finally:
+                if args.nvtx:
+                    torch.cuda.nvtx.range_pop()
 
         def dispatch_stage():
             if transport_mode == "bf16":
                 return dispatch_deduplicated(x, active_plan)
-            source_q, source_sf = quantize_mxfp8_rows(x)
+            source_q, source_sf = (
+                prequantized_source
+                if prequantized_source is not None
+                else quantize_mxfp8_rows(x)
+            )
             # NCCL treats scale factors as payload bytes.  Moving the uint8
             # view avoids relying on collective support for the new E8M0 dtype.
             return dispatch_deduplicated(
                 source_q, active_plan, scales=source_sf.view(torch.uint8)
             )
 
-        dispatched = stage(dispatch_stage)
-        pair_x, _, recv_token, pair_weights, indptr = stage(
-            lambda: expand_and_sort(dispatched, active_experts)
-        )
+        dispatched = stage(dispatch_stage, "dispatch_quant_a2a")
+        if use_route_pack:
+            assert route_workspace is not None
+            if dispatched.scales is None:
+                raise RuntimeError("MXFP8 transport did not deliver source scales")
+            packed = stage(
+                lambda: route_pack_mxfp8(
+                    dispatched.x,
+                    dispatched.scales,
+                    dispatched.expert_ids,
+                    dispatched.weights,
+                    active_total_pairs,
+                    route_workspace,
+                ),
+                "compact_sort",
+            )
+            pair_x = packed.operand.qdata
+            recv_token = packed.recv_token
+            pair_weights = packed.weights
+            indptr = packed.indptr
+        else:
+            pair_x, _, recv_token, pair_weights, indptr = stage(
+                lambda: expand_and_sort(dispatched, active_experts),
+                "compact_sort",
+            )
         if pair_x.shape[0] == 0:
             raise RuntimeError("empty destination ranks are not supported by this benchmark")
 
         def pack_fc1():
+            if use_route_pack:
+                return packed.operand
             if transport_mode == "bf16":
                 return quantize_varlen_m_operand(pair_x, indptr)
             if dispatched.scales is None:
@@ -526,31 +689,153 @@ def main() -> int:
             )
             return make_varlen_m_operand(pair_x, linear_sf, indptr)
 
-        fc1_input = stage(pack_fc1)
-        postact = stage(
-            lambda: mxfp8_swiglu_grouped(fc1_input, active_w1, indptr, config=config)
-        )
-        pair_out = stage(
-            lambda: mxfp8_down_grouped(postact, active_w2, indptr, config=config)
-        )
+        fc1_input = stage(pack_fc1, "pack_fc1_sfa")
+        if use_workspace:
+            assert mlp_workspace is not None
+            postact_out = mlp_workspace.active_postact(pair_x.shape[0])
+            postact = stage(
+                lambda: mxfp8_swiglu_grouped_out(
+                    fc1_input,
+                    active_w1,
+                    indptr,
+                    postact_out,
+                    config=config,
+                    expert_order=active_expert_order,
+                ),
+                "fc1_swiglu_quant",
+            )
+            if use_direct_fc2_reduce:
+                assert reduce_workspace is not None
+                direct_reduced = stage(
+                    lambda: mxfp8_down_grouped_weighted_reduce(
+                        postact,
+                        active_w2,
+                        indptr,
+                        recv_token,
+                        pair_weights,
+                        reduce_workspace.active(dispatched.x.shape[0]),
+                        config=config,
+                        expert_order=active_expert_order,
+                    ),
+                    "fc2",
+                )
+                pair_out = None
+            else:
+                pair_out_buffer = mlp_workspace.active_fc2_output(pair_x.shape[0])
+                pair_out = stage(
+                    lambda: mxfp8_down_grouped(
+                        postact,
+                        active_w2,
+                        indptr,
+                        config=config,
+                        out=pair_out_buffer,
+                        expert_order=active_expert_order,
+                    ),
+                    "fc2",
+                )
+        else:
+            postact = stage(
+                lambda: mxfp8_swiglu_grouped(
+                    fc1_input,
+                    active_w1,
+                    indptr,
+                    config=config,
+                    expert_order=active_expert_order,
+                ),
+                "fc1_swiglu_quant",
+            )
+            pair_out = stage(
+                lambda: mxfp8_down_grouped(
+                    postact,
+                    active_w2,
+                    indptr,
+                    config=config,
+                    expert_order=active_expert_order,
+                ),
+                "fc2",
+            )
 
         def reduce_stage():
-            reduced = torch.zeros(
-                (dispatched.x.shape[0], args.hidden), dtype=torch.float32, device=device
+            if use_direct_fc2_reduce:
+                assert reduce_workspace is not None
+                output = reduce_workspace.output[: dispatched.x.shape[0]]
+                output.copy_(direct_reduced)
+                return output
+            if use_fused_reduce:
+                assert reduce_workspace is not None
+                if data_path == "fused_segmented" and use_route_pack:
+                    assert route_workspace is not None
+                    return segmented_weighted_reduce_mxfp8(
+                        pair_out,
+                        route_workspace.scatter_pos,
+                        pair_weights,
+                        dispatched.x.shape[0],
+                        args.top_k,
+                        reduce_workspace,
+                    )
+                if data_path == "fused_hybrid" and use_route_pack:
+                    assert route_workspace is not None
+                    return hybrid_weighted_reduce_mxfp8(
+                        pair_out,
+                        recv_token,
+                        route_workspace.scatter_pos,
+                        pair_weights,
+                        dispatched.x.shape[0],
+                        args.top_k,
+                        reduce_workspace,
+                    )[0]
+                return weighted_reduce_mxfp8(
+                    pair_out,
+                    recv_token,
+                    pair_weights,
+                    dispatched.x.shape[0],
+                    reduce_workspace,
+                )
+            reduced = (
+                reduce_workspace.active(dispatched.x.shape[0]).zero_()
+                if use_workspace
+                else torch.zeros(
+                    (dispatched.x.shape[0], args.hidden),
+                    dtype=torch.float32,
+                    device=device,
+                )
             )
-            reduced.index_add_(0, recv_token, pair_out.float() * pair_weights[:, None])
-            return reduced.to(torch.bfloat16)
+            if data_path == "reference_chunked":
+                for begin in range(0, pair_out.shape[0], args.reference_chunk_pairs):
+                    end = min(begin + args.reference_chunk_pairs, pair_out.shape[0])
+                    reduced.index_add_(
+                        0,
+                        recv_token[begin:end],
+                        pair_out[begin:end].float() * pair_weights[begin:end, None],
+                    )
+            else:
+                reduced.index_add_(
+                    0, recv_token, pair_out.float() * pair_weights[:, None]
+                )
+            if not use_workspace:
+                return reduced.to(torch.bfloat16)
+            assert reduce_workspace is not None
+            output = reduce_workspace.output[: dispatched.x.shape[0]]
+            output.copy_(reduced)
+            return output
 
-        reduced = stage(reduce_stage)
-        out = stage(lambda: combine_deduplicated(reduced, active_plan, args.tokens))
+        reduced = stage(reduce_stage, "local_reduce")
+        out = stage(
+            lambda: combine_deduplicated(reduced, active_plan, args.tokens),
+            "combine",
+        )
         total_end.record()
         return out, events, (total_start, total_end), int(pair_x.shape[0])
 
     # Quantizing before transport and quantizing the same BF16 rows after
     # grouping should be numerically equivalent.  Keep this gate outside the
     # timed sample set.
-    bf16_transport_out = forward(False, "bf16")[0]
-    mxfp8_transport_out = forward(False, "mxfp8")[0]
+    bf16_transport_out = forward(
+        False, "bf16", data_path_override="reference_chunked"
+    )[0]
+    mxfp8_transport_out = forward(
+        False, "mxfp8", data_path_override="reference_chunked"
+    )[0]
     torch.cuda.synchronize()
     transport_diff = (mxfp8_transport_out.float() - bf16_transport_out.float()).reshape(-1)
     bf16_flat = bf16_transport_out.float().reshape(-1)
@@ -568,6 +853,95 @@ def main() -> int:
     rank_max(transport_numeric[:2])
     dist.all_reduce(transport_numeric[2:], op=dist.ReduceOp.MIN)
 
+    # C4 uses the same old FC1/FC2/FP32 index_add math, but caps only the
+    # setup-time multiply temporary.  The timed ``baseline`` path remains one
+    # unchunked index_add call for a fair before/after comparison.
+    baseline_path_out = forward(
+        False, "mxfp8", data_path_override="reference_chunked"
+    )[0]
+    mlp_workspace = (
+        allocate_mxfp8_moe_workspace(
+            physical_experts,
+            active_total_pairs,
+            args.hidden,
+            args.intermediate,
+            device=device,
+            include_fc2_output=args.data_path != "fc2_epilogue_atomic",
+        )
+        if args.data_path != "baseline"
+        else None
+    )
+    route_workspace = (
+        allocate_mxfp8_route_pack_workspace(
+            active_recv_tokens,
+            active_total_pairs,
+            args.top_k,
+            physical_experts,
+            args.hidden,
+            device=device,
+        )
+        if needs_route_workspace
+        else None
+    )
+    reduce_workspace = (
+        allocate_mxfp8_weighted_reduce_workspace(
+            active_recv_tokens,
+            args.hidden,
+            device=device,
+            include_fp32=args.data_path not in ("fused_segmented",),
+        )
+        if args.data_path != "baseline"
+        else None
+    )
+    selected_path_out = forward(False, "mxfp8", data_path_override=args.data_path)[0]
+    torch.cuda.synchronize()
+    path_difference = selected_path_out.float() - baseline_path_out.float()
+    path_bad = path_difference.abs() > 0.05 + 0.05 * baseline_path_out.float().abs()
+    data_path_numeric = torch.tensor(
+        [
+            float(path_bad.sum()),
+            float(path_difference.abs().max()),
+            float(path_difference.abs().mean()),
+            float(
+                torch.linalg.vector_norm(path_difference)
+                / torch.linalg.vector_norm(baseline_path_out.float()).clamp_min(1e-20)
+            ),
+        ],
+        dtype=torch.float64,
+        device=device,
+    )
+    rank_max(data_path_numeric)
+    if int(data_path_numeric[0]) or float(data_path_numeric[3]) > 5e-3:
+        raise AssertionError(
+            f"0902 data-path numerical gate failed: {data_path_numeric.tolist()}"
+        )
+
+    atomic_variance_numeric = torch.zeros(3, dtype=torch.float64, device=device)
+    atomic_paths = {"fused", "fused_atomic", "fc2_epilogue_atomic"}
+    if args.data_path in atomic_paths and args.atomic_variance_runs > 1:
+        variance_reference = selected_path_out.clone()
+        max_abs = torch.zeros((), dtype=torch.float64, device=device)
+        max_rel_l2 = torch.zeros((), dtype=torch.float64, device=device)
+        nonzero = torch.zeros((), dtype=torch.float64, device=device)
+        reference_norm = torch.linalg.vector_norm(
+            variance_reference.float()
+        ).clamp_min(1e-20)
+        for _ in range(args.atomic_variance_runs - 1):
+            repeated = forward(
+                False, "mxfp8", data_path_override=args.data_path
+            )[0]
+            difference = repeated.float() - variance_reference.float()
+            max_abs = torch.maximum(max_abs, difference.abs().max().double())
+            max_rel_l2 = torch.maximum(
+                max_rel_l2,
+                (torch.linalg.vector_norm(difference) / reference_norm).double(),
+            )
+            nonzero += (difference != 0).sum().double()
+        atomic_variance_numeric[:] = torch.stack(
+            (max_abs, max_rel_l2, nonzero)
+        )
+        rank_max(atomic_variance_numeric)
+
     placement_numeric = torch.zeros(4, dtype=torch.float64, device=device)
     if initial_weight_bank is not None:
         baseline = forward(
@@ -576,9 +950,14 @@ def main() -> int:
             initial_dispatch_plan,
             local_experts,
             initial_weight_bank,
+            data_path_override="reference_chunked",
         )[0]
         candidate = forward(
-            False, "mxfp8", placement_dispatch_plan, physical_experts
+            False,
+            "mxfp8",
+            placement_dispatch_plan,
+            physical_experts,
+            data_path_override="reference_chunked",
         )[0]
         torch.cuda.synchronize()
         difference = candidate.float() - baseline.float()
@@ -606,9 +985,19 @@ def main() -> int:
     experimental_replica_numeric = torch.zeros(4, dtype=torch.float64, device=device)
     if experimental_replica_plan is not None:
         baseline = forward(
-            False, "mxfp8", placement_dispatch_plan, physical_experts
+            False,
+            "mxfp8",
+            placement_dispatch_plan,
+            physical_experts,
+            data_path_override="reference_chunked",
         )[0]
-        candidate = forward(False, "mxfp8", dispatch_plan, physical_experts)[0]
+        candidate = forward(
+            False,
+            "mxfp8",
+            dispatch_plan,
+            physical_experts,
+            data_path_override="reference_chunked",
+        )[0]
         torch.cuda.synchronize()
         difference = candidate.float() - baseline.float()
         bad = difference.abs() > 0.05 + 0.05 * baseline.float().abs()
@@ -644,6 +1033,8 @@ def main() -> int:
     all_stage_events = []
     all_total_events = []
     local_pairs = 0
+    if args.cuda_profiler_capture:
+        torch.cuda.profiler.start()
     host_start = time.perf_counter()
     for _ in range(args.iters):
         _, stage_events, total_events, local_pairs = forward(not args.stability)
@@ -651,6 +1042,8 @@ def main() -> int:
             all_stage_events.append(stage_events)
         all_total_events.append(total_events)
     torch.cuda.synchronize()
+    if args.cuda_profiler_capture:
+        torch.cuda.profiler.stop()
     host_mean_ms = (time.perf_counter() - host_start) * 1e3 / args.iters
 
     stage_local = None
@@ -794,6 +1187,54 @@ def main() -> int:
             "warmup": args.warmup,
             "iterations": args.iters,
             "activation_transport": args.activation_transport,
+            "timing_scope": "E0_prequantized" if args.prequantized_source else "E1_source_quantized",
+            "source_quantization_in_timed_forward": not args.prequantized_source,
+            "data_path": args.data_path,
+            "heavy_expert_first": args.heavy_expert_first,
+            "weighted_reduce_policy": (
+                "segmented"
+                if args.data_path == "fused_segmented"
+                or (
+                    args.data_path == "fused_hybrid"
+                    and active_total_pairs / max(1, active_recv_tokens) >= 2.0
+                )
+                else "atomic"
+                if args.data_path
+                in (
+                    "fused",
+                    "fused_atomic",
+                    "fused_hybrid",
+                    "fc2_epilogue_atomic",
+                )
+                else "baseline_index_add"
+            ),
+            "pair_output_materialized": args.data_path != "fc2_epilogue_atomic",
+            "data_path_correctness": {
+                "bad_count": int(data_path_numeric[0]),
+                "max_abs": float(data_path_numeric[1]),
+                "mean_abs": float(data_path_numeric[2]),
+                "relative_l2": float(data_path_numeric[3]),
+            },
+            "atomic_repeatability": {
+                "runs": args.atomic_variance_runs,
+                "max_abs": float(atomic_variance_numeric[0]),
+                "max_relative_l2": float(atomic_variance_numeric[1]),
+                "nonzero_differences": int(atomic_variance_numeric[2]),
+            }
+            if args.data_path in atomic_paths
+            else None,
+            "workspace_bytes": {
+                "local_mlp": mlp_workspace.nbytes if mlp_workspace is not None else 0,
+                "route_pack": route_workspace.nbytes if route_workspace is not None else 0,
+                "weighted_reduce": (
+                    reduce_workspace.nbytes if reduce_workspace is not None else 0
+                ),
+                "total": sum(
+                    workspace.nbytes
+                    for workspace in (mlp_workspace, route_workspace, reduce_workspace)
+                    if workspace is not None
+                ),
+            },
             "transport": f"torch_nccl_all_to_all_deduplicated_{args.activation_transport}",
             "quantization": {
                 "values": "OCP MXFP8 E4M3",

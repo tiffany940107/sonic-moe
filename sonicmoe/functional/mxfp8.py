@@ -28,7 +28,7 @@ from quack.blockscaled import (
     to_mx_compiled,
     unpack_scale_blocked_to_2d,
 )
-from quack.epilogue.library import identity_epi, swiglu_quant_mod
+from quack.epilogue.library import identity_epi, swiglu_quant_mod, weighted_scatter_epi
 
 MXFP8_FORMAT = MXFP8_E4M3.name
 MXFP8_SCALE_BLOCK_K = MXFP8_E4M3.sf_vec_size
@@ -66,6 +66,110 @@ class Mxfp8MoEKernelConfig:
 
 
 _DEFAULT_CONFIG = Mxfp8MoEKernelConfig()
+
+
+@dataclass(frozen=True)
+class Mxfp8MoEWorkspace:
+    """Reusable buffers for the two-stage SM120 MXFP8 expert MLP.
+
+    The workspace owns capacity, while each forward takes prefix views sized
+    to the active routed-row count.  Keeping allocation outside the hot path
+    makes the ownership boundary explicit and permits CUDA Graph capture for
+    fixed-capacity inference batches.
+    """
+
+    postact_qdata: torch.Tensor
+    postact_scale: torch.Tensor
+    fc2_output: torch.Tensor | None
+    num_experts: int
+    max_total_m: int
+    hidden: int
+    intermediate: int
+
+    @property
+    def nbytes(self) -> int:
+        return sum(
+            tensor.numel() * tensor.element_size()
+            for tensor in (self.postact_qdata, self.postact_scale, self.fc2_output)
+            if tensor is not None
+        )
+
+    def active_postact(self, total_m: int) -> BlockScaledOperand:
+        if not 0 <= total_m <= self.max_total_m:
+            raise ValueError(
+                f"active rows {total_m} exceed workspace capacity {self.max_total_m}"
+            )
+        padded_rm = _ceil_div(total_m, MXFP8_SCALE_ATOM_M) + self.num_experts - 1
+        return BlockScaledOperand.from_parts(
+            self.postact_qdata[:total_m],
+            self.postact_scale[:, :padded_rm],
+            MXFP8_FORMAT,
+        )
+
+    def active_fc2_output(self, total_m: int) -> torch.Tensor:
+        if not 0 <= total_m <= self.max_total_m:
+            raise ValueError(
+                f"active rows {total_m} exceed workspace capacity {self.max_total_m}"
+            )
+        if self.fc2_output is None:
+            raise RuntimeError("this workspace was allocated without a pair-output buffer")
+        return self.fc2_output[:total_m]
+
+
+def allocate_mxfp8_moe_workspace(
+    num_experts: int,
+    max_total_m: int,
+    hidden: int,
+    intermediate: int,
+    *,
+    device: torch.device | str,
+    include_fc2_output: bool = True,
+) -> Mxfp8MoEWorkspace:
+    """Allocate all FC1-to-FC2 hot-path outputs once.
+
+    ``max_total_m`` is a capacity rather than a required live row count.  The
+    active views returned by :class:`Mxfp8MoEWorkspace` preserve QuACK's
+    variable-M scale padding contract for every smaller row count.
+    """
+
+    if num_experts <= 0:
+        raise ValueError("num_experts must be positive")
+    if max_total_m < 0:
+        raise ValueError("max_total_m must be non-negative")
+    if hidden % 128 or intermediate % 128:
+        raise ValueError("hidden and intermediate must be divisible by 128")
+    padded_rm = _ceil_div(max_total_m, MXFP8_SCALE_ATOM_M) + num_experts - 1
+    postact_qdata = torch.empty(
+        (max_total_m, intermediate),
+        dtype=torch.float8_e4m3fn,
+        device=device,
+    )
+    postact_scale = torch.empty(
+        (
+            1,
+            padded_rm,
+            _ceil_div(intermediate, 4 * MXFP8_SCALE_BLOCK_K),
+            32,
+            4,
+            4,
+        ),
+        dtype=torch.float8_e8m0fnu,
+        device=device,
+    )
+    fc2_output = (
+        torch.empty((max_total_m, hidden), dtype=torch.bfloat16, device=device)
+        if include_fc2_output
+        else None
+    )
+    return Mxfp8MoEWorkspace(
+        postact_qdata=postact_qdata,
+        postact_scale=postact_scale,
+        fc2_output=fc2_output,
+        num_experts=num_experts,
+        max_total_m=max_total_m,
+        hidden=hidden,
+        intermediate=intermediate,
+    )
 
 
 def quantize_mxfp8_rows(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -320,6 +424,7 @@ def mxfp8_swiglu_grouped(
     cu_seqlens_m: torch.Tensor,
     *,
     config: Mxfp8MoEKernelConfig = _DEFAULT_CONFIG,
+    expert_order: torch.Tensor | None = None,
 ) -> BlockScaledOperand:
     """Run MXFP8 FC1 and fuse SwiGLU plus MXFP8 post-activation quantization."""
 
@@ -342,11 +447,69 @@ def mxfp8_swiglu_grouped(
         dtype=torch.float8_e8m0fnu,
         device=x.device,
     )
+    out = BlockScaledOperand.from_parts(out_q, out_sf, MXFP8_FORMAT)
+    return mxfp8_swiglu_grouped_out(
+        x, w1, cu_seqlens_m, out, config=config, expert_order=expert_order
+    )
+
+
+def mxfp8_swiglu_grouped_out(
+    x: BlockScaledOperand,
+    w1: BlockScaledOperand,
+    cu_seqlens_m: torch.Tensor,
+    out: BlockScaledOperand,
+    *,
+    config: Mxfp8MoEKernelConfig = _DEFAULT_CONFIG,
+    expert_order: torch.Tensor | None = None,
+) -> BlockScaledOperand:
+    """Allocation-free FC1 + SwiGLU + MXFP8 requant into ``out``."""
+
+    if x.format != MXFP8_E4M3 or w1.format != MXFP8_E4M3:
+        raise TypeError("FC1 requires MXFP8 E4M3 values with E8M0 scales")
+    if x.ndim != 2 or w1.ndim != 3:
+        raise ValueError("expected x=(sum(M_e), H) and w1=(E, 2I, H)")
+    experts, two_i, hidden = w1.shape
+    if two_i % 2:
+        raise ValueError("FC1 physical output width must be even")
+    intermediate = two_i // 2
+    total_m = x.shape[0]
+    if x.shape[1] != hidden:
+        raise ValueError("activation and FC1 hidden dimensions differ")
+    if cu_seqlens_m.shape != (experts + 1,):
+        raise ValueError("cu_seqlens_m length must be num_experts + 1")
+    expected_scale_shape = (
+        1,
+        _ceil_div(total_m, MXFP8_SCALE_ATOM_M) + experts - 1,
+        _ceil_div(intermediate, 4 * MXFP8_SCALE_BLOCK_K),
+        32,
+        4,
+        4,
+    )
+    if out.format != MXFP8_E4M3:
+        raise TypeError("FC1 output must use the MXFP8 E4M3 format")
+    if out.qdata.shape != (total_m, intermediate):
+        raise ValueError(
+            f"FC1 output qdata must have shape {(total_m, intermediate)}, "
+            f"got {tuple(out.qdata.shape)}"
+        )
+    if tuple(out.scale.shape) != expected_scale_shape:
+        raise ValueError(
+            f"FC1 output scale must have shape {expected_scale_shape}, "
+            f"got {tuple(out.scale.shape)}"
+        )
+    if x.device != w1.device or x.device != out.device or x.device != cu_seqlens_m.device:
+        raise ValueError("x, w1, out, and cu_seqlens_m must be on the same device")
+    if expert_order is not None and (
+        expert_order.shape != (experts,)
+        or expert_order.dtype != torch.int32
+        or expert_order.device != x.device
+    ):
+        raise ValueError("expert_order must be a device int32 permutation of all experts")
     swiglu_quant_mod.gemm(
         x.qdata,
         w1.qdata,
         None,
-        epi_args={"postact": out_q, "postact_sf": out_sf},
+        epi_args={"postact": out.qdata, "postact_sf": out.scale},
         tile_M=config.fc1_tile_m,
         tile_N=config.fc1_tile_n,
         cluster_M=1,
@@ -355,12 +518,13 @@ def mxfp8_swiglu_grouped(
         persistent=True,
         is_dynamic_persistent=config.dynamic_persistent,
         cu_seqlens_m=cu_seqlens_m,
+        batch_idx_permute=expert_order,
         SFA=x.scale,
         SFB=w1.scale,
         bs_format_a=x.format.name,
         bs_format_b=w1.format.name,
     )
-    return BlockScaledOperand.from_parts(out_q, out_sf, MXFP8_FORMAT)
+    return out
 
 
 def mxfp8_down_grouped(
@@ -370,10 +534,92 @@ def mxfp8_down_grouped(
     *,
     config: Mxfp8MoEKernelConfig = _DEFAULT_CONFIG,
     out: torch.Tensor | None = None,
+    expert_order: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run the MXFP8 FC2 grouped GEMM and return BF16 grouped outputs."""
 
-    return mxfp8_grouped_gemm(postact, w2, cu_seqlens_m, config=config, out=out)
+    return mxfp8_grouped_gemm(
+        postact,
+        w2,
+        cu_seqlens_m,
+        config=config,
+        out=out,
+        expert_order=expert_order,
+    )
+
+
+def mxfp8_down_grouped_weighted_reduce(
+    postact: BlockScaledOperand,
+    w2: BlockScaledOperand,
+    cu_seqlens_m: torch.Tensor,
+    recv_token: torch.Tensor,
+    weights: torch.Tensor,
+    reduced: torch.Tensor,
+    *,
+    config: Mxfp8MoEKernelConfig = _DEFAULT_CONFIG,
+    expert_order: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """FC2 with router-score multiply and FP32 token reduction in its epilogue."""
+
+    if postact.format != MXFP8_E4M3 or w2.format != MXFP8_E4M3:
+        raise TypeError("weighted FC2 requires MXFP8 E4M3 operands")
+    experts, hidden, intermediate = w2.shape
+    total_m = postact.shape[0]
+    if postact.shape != (total_m, intermediate):
+        raise ValueError("FC2 activation and weight K dimensions differ")
+    if cu_seqlens_m.shape != (experts + 1,):
+        raise ValueError("cu_seqlens_m length must be number of experts + 1")
+    if recv_token.shape != (total_m,) or recv_token.dtype not in (
+        torch.int32,
+        torch.int64,
+    ):
+        raise ValueError("recv_token must be int32/int64 with one entry per pair")
+    if weights.shape != (total_m,) or weights.dtype != torch.float32:
+        raise ValueError("weights must be float32 with one entry per pair")
+    if (
+        reduced.ndim != 2
+        or reduced.shape[1] != hidden
+        or reduced.dtype != torch.float32
+        or not reduced.is_contiguous()
+    ):
+        raise ValueError("reduced must be contiguous FP32 (receive_tokens, hidden)")
+    if any(
+        tensor.device != postact.device
+        for tensor in (w2.qdata, cu_seqlens_m, recv_token, weights, reduced)
+    ):
+        raise ValueError("all weighted FC2 tensors must be on one device")
+    if expert_order is not None and (
+        expert_order.shape != (experts,)
+        or expert_order.dtype != torch.int32
+        or expert_order.device != postact.device
+    ):
+        raise ValueError("expert_order must be a device int32 expert permutation")
+
+    reduced.zero_()
+    weighted_scatter_epi.gemm(
+        postact.qdata,
+        w2.qdata,
+        None,
+        epi_args={
+            "score": weights,
+            "recv_token": recv_token,
+            "reduced": reduced,
+        },
+        tile_M=config.fc2_tile_m,
+        tile_N=config.fc2_tile_n,
+        cluster_M=1,
+        cluster_N=1,
+        pingpong=config.pingpong,
+        persistent=True,
+        is_dynamic_persistent=config.dynamic_persistent,
+        cu_seqlens_m=cu_seqlens_m,
+        batch_idx_permute=expert_order,
+        SFA=postact.scale,
+        SFB=w2.scale,
+        bs_format_a=postact.format.name,
+        bs_format_b=w2.format.name,
+    )
+    return reduced
 
 
 def mxfp8_grouped_gemm(
@@ -383,6 +629,7 @@ def mxfp8_grouped_gemm(
     *,
     config: Mxfp8MoEKernelConfig = _DEFAULT_CONFIG,
     out: torch.Tensor | None = None,
+    expert_order: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Run ``{X_e @ W_e.T}_e`` as one variable-M MXFP8 grouped GEMM.
 
@@ -407,6 +654,12 @@ def mxfp8_grouped_gemm(
         raise ValueError("cu_seqlens_m length must be number of groups + 1")
     if x.device != weight.device or x.device != cu_seqlens_m.device:
         raise ValueError("x, weight, and cu_seqlens_m must be on the same device")
+    if expert_order is not None and (
+        expert_order.shape != (experts,)
+        or expert_order.dtype != torch.int32
+        or expert_order.device != x.device
+    ):
+        raise ValueError("expert_order must be a device int32 permutation of all experts")
 
     total_m = x.shape[0]
     if out is None:
@@ -436,6 +689,7 @@ def mxfp8_grouped_gemm(
         persistent=True,
         is_dynamic_persistent=config.dynamic_persistent,
         cu_seqlens_m=cu_seqlens_m,
+        batch_idx_permute=expert_order,
         SFA=x.scale,
         SFB=weight.scale,
         bs_format_a=x.format.name,
@@ -451,12 +705,50 @@ def moe_mxfp8_grouped_forward(
     cu_seqlens_m: torch.Tensor,
     *,
     config: Mxfp8MoEKernelConfig = _DEFAULT_CONFIG,
+    workspace: Mxfp8MoEWorkspace | None = None,
+    expert_order: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, BlockScaledOperand]:
     """Run local expert FC1-SwiGLU-FC2 for rows grouped by expert."""
 
-    _validate_grouped_inputs(x, w1, w2, cu_seqlens_m)
-    postact = mxfp8_swiglu_grouped(x, w1, cu_seqlens_m, config=config)
-    out = mxfp8_down_grouped(postact, w2, cu_seqlens_m, config=config)
+    experts, hidden, intermediate, total_m = _validate_grouped_inputs(
+        x, w1, w2, cu_seqlens_m
+    )
+    if workspace is None:
+        postact = mxfp8_swiglu_grouped(
+            x, w1, cu_seqlens_m, config=config, expert_order=expert_order
+        )
+        out = mxfp8_down_grouped(
+            postact,
+            w2,
+            cu_seqlens_m,
+            config=config,
+            expert_order=expert_order,
+        )
+        return out, postact
+    if (
+        workspace.num_experts != experts
+        or workspace.hidden != hidden
+        or workspace.intermediate != intermediate
+    ):
+        raise ValueError("workspace shape metadata does not match the expert MLP")
+    postact = workspace.active_postact(total_m)
+    out = workspace.active_fc2_output(total_m)
+    mxfp8_swiglu_grouped_out(
+        x,
+        w1,
+        cu_seqlens_m,
+        postact,
+        config=config,
+        expert_order=expert_order,
+    )
+    mxfp8_down_grouped(
+        postact,
+        w2,
+        cu_seqlens_m,
+        config=config,
+        out=out,
+        expert_order=expert_order,
+    )
     return out, postact
 
 
@@ -465,13 +757,17 @@ __all__ = [
     "MXFP8_SCALE_ATOM_M",
     "MXFP8_SCALE_BLOCK_K",
     "Mxfp8MoEKernelConfig",
+    "Mxfp8MoEWorkspace",
+    "allocate_mxfp8_moe_workspace",
     "allocate_mxfp8_weights",
     "dequantize_varlen_m_operand",
     "make_varlen_m_operand",
     "moe_mxfp8_grouped_forward",
     "mxfp8_down_grouped",
+    "mxfp8_down_grouped_weighted_reduce",
     "mxfp8_grouped_gemm",
     "mxfp8_swiglu_grouped",
+    "mxfp8_swiglu_grouped_out",
     "pack_varlen_m_scales",
     "quantize_mxfp8_rows",
     "quantize_varlen_m_operand",

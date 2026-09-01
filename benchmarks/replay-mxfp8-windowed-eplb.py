@@ -29,6 +29,12 @@ def main() -> int:
     parser.add_argument("--unoptimized-step-ms", type=float, required=True)
     parser.add_argument("--optimized-step-ms", type=float, required=True)
     parser.add_argument("--reconfiguration-ms", type=float, required=True)
+    parser.add_argument(
+        "--remote-record-cost-ms",
+        type=float,
+        default=0.0,
+        help="topology-fitted cost per deduplicated source-token/destination-rank record",
+    )
     parser.add_argument("--window", type=int, default=16)
     parser.add_argument("--update-interval", type=int, default=16)
     parser.add_argument("--persistence-windows", type=int, default=2)
@@ -40,6 +46,12 @@ def main() -> int:
     parser.add_argument("--replica-slots-per-rank", type=int, default=8)
     parser.add_argument("--replica-max-copies", type=int, default=4)
     parser.add_argument("--minimum-saving-ms", type=float, default=0.05)
+    parser.add_argument(
+        "--amortization-horizon-steps",
+        type=int,
+        default=None,
+        help="reject migrations whose predicted break-even exceeds this horizon",
+    )
     parser.add_argument(
         "--experimental-replica",
         action="store_true",
@@ -71,12 +83,19 @@ def main() -> int:
         if metadata.get("experts") != 512 or metadata.get("ep_size") != 4:
             raise ValueError(f"unsupported sidecar shape: {sidecar}")
         loads = torch.tensor(metadata["post_ep_global_expert_counts"], dtype=torch.int64)
+        trace_path = sidecar.parent / metadata["file"]
+        trace = torch.load(trace_path, map_location="cpu", weights_only=True)
+        source_token_experts = torch.as_tensor(trace["expert_ids"], dtype=torch.int64)
+        source_token_experts = source_token_experts.view(4, -1, source_token_experts.shape[1])
         for _ in range(profile_steps):
             step += 1
             decision = controller.observe(
                 loads,
                 unoptimized_step_ms=args.unoptimized_step_ms,
                 reconfiguration_ms=args.reconfiguration_ms,
+                source_token_experts=source_token_experts,
+                remote_record_cost_ms=args.remote_record_cost_ms,
+                amortization_horizon_steps=args.amortization_horizon_steps,
             )
             timeline.append(
                 {
@@ -93,6 +112,9 @@ def main() -> int:
                     "changed_experts": decision.changed_experts,
                     "predicted_before": decision.predicted_before,
                     "predicted_after": decision.predicted_after,
+                    "remote_records_before": decision.remote_records_before,
+                    "remote_records_after": decision.remote_records_after,
+                    "predicted_candidate_ms": decision.predicted_candidate_ms,
                     "predicted_saving_ms": decision.predicted_saving_ms,
                     "break_even_steps": decision.break_even_steps,
                 }
@@ -126,6 +148,8 @@ def main() -> int:
             "replica_slots_per_rank": controller.replica_slots_per_rank,
             "replica_max_copies": controller.replica_max_copies,
             "minimum_saving_ms": controller.minimum_saving_ms,
+            "remote_record_cost_ms": args.remote_record_cost_ms,
+            "amortization_horizon_steps": args.amortization_horizon_steps,
         },
         "measured_inputs": {
             "unoptimized_step_ms": args.unoptimized_step_ms,

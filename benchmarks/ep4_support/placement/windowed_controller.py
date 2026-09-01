@@ -26,6 +26,9 @@ class EPLBDecision:
     changed_experts: list[int]
     predicted_before: int
     predicted_after: int
+    remote_records_before: int | None
+    remote_records_after: int | None
+    predicted_candidate_ms: float
     predicted_saving_ms: float
     reconfiguration_ms: float
     break_even_steps: float | None
@@ -100,10 +103,24 @@ class WindowedEPLB:
         *,
         unoptimized_step_ms: float,
         reconfiguration_ms: float,
+        source_token_experts: torch.Tensor | None = None,
+        remote_record_cost_ms: float = 0.0,
+        amortization_horizon_steps: int | None = None,
     ) -> EPLBDecision:
-        """Observe one histogram and optionally apply a new static placement."""
-        if unoptimized_step_ms < 0 or reconfiguration_ms < 0:
+        """Observe one histogram and optionally apply a new static placement.
+
+        ``source_token_experts`` is an optional global routing sample with shape
+        ``[ep_size, tokens_per_rank, top_k]`` (or the flattened two-dimensional
+        equivalent).  When supplied, the controller predicts the same
+        source-token/destination-rank records used by deduplicated EP dispatch.
+        This is intentionally not a source/expert pair histogram: multiple
+        routes from one token to the same destination rank share one activation
+        record on the wire.
+        """
+        if min(unoptimized_step_ms, reconfiguration_ms, remote_record_cost_ms) < 0:
             raise ValueError("latency inputs must be non-negative")
+        if amortization_horizon_steps is not None and amortization_horizon_steps <= 0:
+            raise ValueError("amortization_horizon_steps must be positive")
         loads = expert_loads.to(torch.int64).cpu()
         if loads.shape != self.placement.shape or bool((loads < 0).any()):
             raise ValueError("expert_loads must be a non-negative vector matching placement")
@@ -116,12 +133,63 @@ class WindowedEPLB:
         mean_expert = aggregate.to(torch.float64).mean().clamp_min(1.0)
         hot_expert_ratio = float(aggregate.max() / mean_expert)
         predicted_before = int(before_loads.max())
+        routes = None
+        if source_token_experts is not None:
+            routes = source_token_experts.to(torch.int64).cpu()
+            if routes.ndim == 2:
+                if routes.shape[0] % self.ep_size:
+                    raise ValueError(
+                        "flattened source_token_experts rows must divide ep_size"
+                    )
+                routes = routes.view(self.ep_size, -1, routes.shape[1])
+            if routes.ndim != 3 or routes.shape[0] != self.ep_size:
+                raise ValueError(
+                    "source_token_experts must have shape (ep_size, tokens, top_k)"
+                )
+            if routes.numel() and (
+                int(routes.min()) < 0 or int(routes.max()) >= self.placement.numel()
+            ):
+                raise ValueError("source_token_experts contains an invalid expert")
+            route_loads = torch.bincount(
+                routes.reshape(-1), minlength=self.placement.numel()
+            )
+            if not torch.equal(route_loads, loads):
+                raise ValueError("source_token_experts do not match expert_loads")
+
+        def remote_records(candidate: torch.Tensor) -> int | None:
+            if routes is None:
+                return None
+            owners = candidate.to(torch.int64)[routes]
+            count = 0
+            for source in range(self.ep_size):
+                for destination in range(self.ep_size):
+                    if destination != source:
+                        count += int((owners[source] == destination).any(dim=1).sum())
+            return count
+
+        before_remote_records = remote_records(self.placement)
+
+        def candidate_cost(
+            candidate_load: int, candidate_remote_records: int | None
+        ) -> float:
+            compute_ms = unoptimized_step_ms * candidate_load / max(1, predicted_before)
+            communication_delta_ms = 0.0
+            if (
+                before_remote_records is not None
+                and candidate_remote_records is not None
+            ):
+                communication_delta_ms = (
+                    candidate_remote_records - before_remote_records
+                ) * remote_record_cost_ms
+            return compute_ms + communication_delta_ms
 
         def no_change(
             reason: str,
             *,
             action: EPLBAction = "none",
             predicted_after: int | None = None,
+            candidate_remote_records: int | None = None,
+            candidate_ms: float | None = None,
             saving_ms: float = 0.0,
             experimental: bool = False,
         ) -> EPLBDecision:
@@ -135,6 +203,15 @@ class WindowedEPLB:
                 changed_experts=[],
                 predicted_before=predicted_before,
                 predicted_after=(predicted_before if predicted_after is None else predicted_after),
+                remote_records_before=before_remote_records,
+                remote_records_after=(
+                    before_remote_records
+                    if candidate_remote_records is None
+                    else candidate_remote_records
+                ),
+                predicted_candidate_ms=(
+                    unoptimized_step_ms if candidate_ms is None else candidate_ms
+                ),
                 predicted_saving_ms=saving_ms,
                 reconfiguration_ms=reconfiguration_ms,
                 break_even_steps=(reconfiguration_ms / saving_ms if saving_ms > 0 else None),
@@ -153,6 +230,8 @@ class WindowedEPLB:
         self._persistent_windows += 1
         full_target = greedy_placement(aggregate, self.ep_size)
         full_after = int(placement_rank_loads(aggregate, full_target, self.ep_size).max())
+        full_remote_records = remote_records(full_target)
+        full_candidate_ms = candidate_cost(full_after, full_remote_records)
 
         if (
             self.enable_experimental_replica
@@ -187,12 +266,14 @@ class WindowedEPLB:
         if self._persistent_windows < self.persistence_windows:
             return no_change("await_persistence", predicted_after=full_after)
 
-        full_saving = unoptimized_step_ms * (
-            predicted_before - full_after
-        ) / max(1, predicted_before)
+        full_saving = unoptimized_step_ms - full_candidate_ms
         if full_saving < self.minimum_saving_ms:
             return no_change(
-                "benefit_too_small", predicted_after=full_after, saving_ms=full_saving
+                "benefit_too_small",
+                predicted_after=full_after,
+                candidate_remote_records=full_remote_records,
+                candidate_ms=full_candidate_ms,
+                saving_ms=full_saving,
             )
 
         candidate = limit_migration(
@@ -204,6 +285,10 @@ class WindowedEPLB:
         predicted_after = int(
             placement_rank_loads(aggregate, candidate, self.ep_size).max()
         )
+        candidate_remote_records = remote_records(candidate)
+        predicted_candidate_ms = candidate_cost(
+            predicted_after, candidate_remote_records
+        )
         if predicted_after >= predicted_before:
             return no_change(
                 "partial_not_beneficial",
@@ -211,9 +296,27 @@ class WindowedEPLB:
                 saving_ms=full_saving,
             )
 
-        actual_saving = unoptimized_step_ms * (
-            predicted_before - predicted_after
-        ) / max(1, predicted_before)
+        actual_saving = unoptimized_step_ms - predicted_candidate_ms
+        if actual_saving < self.minimum_saving_ms:
+            return no_change(
+                "communication_cost_outweighs_compute",
+                predicted_after=predicted_after,
+                candidate_remote_records=candidate_remote_records,
+                candidate_ms=predicted_candidate_ms,
+                saving_ms=actual_saving,
+            )
+        break_even_steps = reconfiguration_ms / actual_saving
+        if (
+            amortization_horizon_steps is not None
+            and break_even_steps > amortization_horizon_steps
+        ):
+            return no_change(
+                "amortization_horizon_exceeded",
+                predicted_after=predicted_after,
+                candidate_remote_records=candidate_remote_records,
+                candidate_ms=predicted_candidate_ms,
+                saving_ms=actual_saving,
+            )
         self.placement = candidate
         self.route_map_version += 1
         self._persistent_windows = 0
@@ -227,11 +330,12 @@ class WindowedEPLB:
             changed_experts=changed,
             predicted_before=predicted_before,
             predicted_after=predicted_after,
+            remote_records_before=before_remote_records,
+            remote_records_after=candidate_remote_records,
+            predicted_candidate_ms=predicted_candidate_ms,
             predicted_saving_ms=actual_saving,
             reconfiguration_ms=reconfiguration_ms,
-            break_even_steps=(
-                reconfiguration_ms / actual_saving if actual_saving > 0 else None
-            ),
+            break_even_steps=break_even_steps,
         )
 
 
