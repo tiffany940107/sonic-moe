@@ -7,9 +7,10 @@ tokens are deduplicated once per destination rank, expanded and sorted by
 local expert, reduced locally, then returned by NCCL all-to-all.  Only the
 local MoE math and quantization format change to OCP MXFP8.
 
-``placement=greedy`` is the static EPLB steady-state case. Planning is reported
-separately and is excluded from the timed forward. Weight migration is not
-performed by this script.
+``placement=greedy`` is the static EPLB steady-state case. Planning and real
+weight migration are reported separately and excluded from the timed forward.
+Use ``--real-weight-migration`` to move both FP8 values and E8M0 scales before
+timing; omitting it retains the historical logical-placement-only behavior.
 """
 
 from __future__ import annotations
@@ -17,14 +18,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 import time
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
-
 from ep4_support.common import summarize_ms
+from ep4_support.placement.experimental_sonic_replica import (
+    allocate_quota,
+    copy_replica_bank,
+    materialize_comm_aware,
+    plan_replicas,
+)
+from ep4_support.placement.sonic_migration import migrate_operand
+from ep4_support.placement.static_greedy import limit_migration
 from ep4_support.routing import (
     contiguous_placement,
     generate_rank_skew_routing,
@@ -40,6 +48,8 @@ from ep4_support.transport import (
     expand_and_sort,
     make_dispatch_plan,
 )
+from quack.blockscaled import BlockScaledOperand
+
 from sonicmoe.functional.mxfp8 import (
     MXFP8_SCALE_BLOCK_K,
     Mxfp8MoEKernelConfig,
@@ -50,7 +60,6 @@ from sonicmoe.functional.mxfp8 import (
     quantize_mxfp8_rows,
     quantize_varlen_m_operand,
 )
-
 
 STAGES = (
     "dispatch_quant_a2a",
@@ -86,6 +95,30 @@ def parse_args() -> argparse.Namespace:
         "--placement", choices=["contiguous", "interleaved", "greedy"], default="contiguous"
     )
     parser.add_argument(
+        "--real-weight-migration",
+        action="store_true",
+        help="collectively move Sonic MXFP8 expert values/scales into the selected placement",
+    )
+    parser.add_argument(
+        "--migration-limit",
+        type=int,
+        default=0,
+        help="maximum experts changed through complete capacity-preserving cycles; 0 is unlimited",
+    )
+    parser.add_argument(
+        "--experimental-replica-slots",
+        type=int,
+        choices=[0, 1, 2, 4, 8, 16],
+        default=0,
+        help="EXPERIMENTAL hot-expert shadow slots per rank; disabled by default",
+    )
+    parser.add_argument(
+        "--experimental-max-copies-per-expert", type=int, choices=[2, 3, 4], default=4
+    )
+    parser.add_argument(
+        "--experimental-minimum-hot-expert-ratio", type=float, default=4.0
+    )
+    parser.add_argument(
         "--activation-transport", choices=["mxfp8", "bf16"], default="mxfp8"
     )
     parser.add_argument("--fc1-tile-m", type=int, choices=[128, 256], default=128)
@@ -113,6 +146,17 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_-]+", args.node_label):
         parser.error("--node-label must be a privacy-safe public alias")
+    if args.migration_limit < 0:
+        parser.error("--migration-limit must be non-negative")
+    if (
+        args.experimental_replica_slots
+        and args.placement != "contiguous"
+        and not args.real_weight_migration
+    ):
+        parser.error(
+            "experimental replica/hybrid with a non-contiguous placement requires "
+            "--real-weight-migration"
+        )
     return args
 
 
@@ -126,6 +170,30 @@ def expert_payload_bytes(hidden: int, intermediate: int) -> int:
     values = 3 * hidden * intermediate
     scales = values // MXFP8_SCALE_BLOCK_K
     return values + scales
+
+
+def base_expert_view(
+    operand: BlockScaledOperand, local_experts: int
+) -> BlockScaledOperand:
+    """View the owner bank without experimental replica reserve slots."""
+    return BlockScaledOperand.from_parts(
+        operand.qdata[:local_experts],
+        operand.scale[:local_experts],
+        operand.format.name,
+    )
+
+
+def install_base_with_shadow_capacity(
+    base: BlockScaledOperand, template: BlockScaledOperand
+) -> BlockScaledOperand:
+    """Install a migrated owner bank while retaining shadow-slot capacity."""
+    if base.qdata.shape[0] == template.qdata.shape[0]:
+        return base
+    qdata = torch.empty_like(template.qdata)
+    scale = torch.empty_like(template.scale)
+    qdata[: base.qdata.shape[0]].copy_(base.qdata)
+    scale[: base.scale.shape[0]].copy_(base.scale)
+    return BlockScaledOperand.from_parts(qdata, scale, base.format.name)
 
 
 def main() -> int:
@@ -194,7 +262,10 @@ def main() -> int:
         torch.cuda.synchronize()
         dist.barrier()
         plan_start = time.perf_counter()
-        placement = greedy_placement(global_loads, world)
+        full_target = greedy_placement(global_loads, world)
+        placement = limit_migration(
+            initial_placement, full_target, args.migration_limit
+        )
         dist.barrier()
         plan_local = torch.tensor(
             (time.perf_counter() - plan_start) * 1e3, dtype=torch.float64, device=device
@@ -209,15 +280,65 @@ def main() -> int:
     initial_rank_loads = torch.bincount(
         initial_placement, weights=global_loads.to(torch.float64), minlength=world
     )
-    dispatch_plan = make_dispatch_plan(
+    initial_dispatch_plan = make_dispatch_plan(
+        route.expert_ids, route.weights, initial_placement, world, device
+    )
+    placement_dispatch_plan = make_dispatch_plan(
         route.expert_ids, route.weights, placement, world, device
     )
+    dispatch_plan = placement_dispatch_plan
+    physical_experts = local_experts
+    experimental_replica_plan = None
+    experimental_replica_loads = None
+    experimental_slot_map = None
+    if args.experimental_replica_slots:
+        ids_device = route.expert_ids.to(device)
+        gathered_ids = [torch.empty_like(ids_device) for _ in range(world)]
+        dist.all_gather(gathered_ids, ids_device)
+        global_ids = torch.cat(gathered_ids).cpu()
+        experimental_replica_plan = plan_replicas(
+            global_loads,
+            placement,
+            world,
+            args.experimental_replica_slots,
+            max_copies_per_expert=args.experimental_max_copies_per_expert,
+            minimum_hot_expert_ratio=args.experimental_minimum_hot_expert_ratio,
+        )
+        if experimental_replica_plan.count:
+            experimental_replica_loads, quotas = allocate_quota(
+                global_loads,
+                placement,
+                experimental_replica_plan.replicas,
+                world,
+            )
+            destinations, local_ids, experimental_slot_map = materialize_comm_aware(
+                global_ids,
+                placement,
+                experimental_replica_plan.replicas,
+                quotas,
+                world,
+                args.experimental_replica_slots,
+                args.tokens,
+            )
+            lower, upper = rank * args.tokens, (rank + 1) * args.tokens
+            dispatch_plan = make_dispatch_plan(
+                route.expert_ids,
+                route.weights,
+                placement,
+                world,
+                device,
+                pair_destinations=destinations[lower:upper],
+                pair_local_ids=local_ids[lower:upper],
+            )
+            physical_experts += args.experimental_replica_slots
+        else:
+            experimental_replica_plan = None
     x = torch.randn((args.tokens, args.hidden), dtype=torch.bfloat16, device=device)
 
     # A BF16 identity oracle checks dispatch, top-k masking, weighting, local
     # reduction, and reverse all-to-all independently of MXFP8 numerics.
     identity_dispatch = dispatch_deduplicated(x, dispatch_plan)
-    identity_pairs = expand_and_sort(identity_dispatch, local_experts)
+    identity_pairs = expand_and_sort(identity_dispatch, physical_experts)
     pair_x_id, _, recv_token_id, pair_weights_id, _ = identity_pairs
     identity_local = torch.zeros_like(identity_dispatch.x)
     identity_local.index_add_(
@@ -238,22 +359,109 @@ def main() -> int:
     rank_max(identity_error)
 
     if rank == 0:
-        print("allocating local OCP MXFP8 expert weights", flush=True)
+        print(
+            f"allocating {physical_experts} local OCP MXFP8 physical experts",
+            flush=True,
+        )
     w1 = allocate_mxfp8_weights(
-        local_experts,
+        physical_experts,
         2 * args.intermediate,
         args.hidden,
         device=device,
         seed=args.seed + 1000 + rank,
     )
     w2 = allocate_mxfp8_weights(
-        local_experts,
+        physical_experts,
         args.hidden,
         args.intermediate,
         device=device,
         seed=args.seed + 2000 + rank,
     )
+    initial_weight_bank = (
+        (base_expert_view(w1, local_experts), base_expert_view(w2, local_experts))
+        if placement_moved_experts and args.real_weight_migration
+        else None
+    )
     bytes_per_expert = expert_payload_bytes(args.hidden, args.intermediate)
+    weight_migration_ms = 0.0
+    weight_migration_bytes = 0
+    weight_migration_sample_bad_bytes = 0
+    weight_migration_sampled_bytes = 0
+    if placement_moved_experts and args.real_weight_migration:
+        torch.cuda.synchronize()
+        dist.barrier()
+        migration_start = time.perf_counter()
+        migrated_w1 = migrate_operand(
+            base_expert_view(w1, local_experts), initial_placement, placement
+        )
+        migrated_w2 = migrate_operand(
+            base_expert_view(w2, local_experts), initial_placement, placement
+        )
+        w1 = install_base_with_shadow_capacity(migrated_w1.operand, w1)
+        w2 = install_base_with_shadow_capacity(migrated_w2.operand, w2)
+        torch.cuda.synchronize()
+        dist.barrier()
+        migration_local = torch.tensor(
+            (time.perf_counter() - migration_start) * 1e3,
+            dtype=torch.float64,
+            device=device,
+        )
+        rank_max(migration_local)
+        weight_migration_ms = float(migration_local)
+        weight_migration_bytes = (
+            migrated_w1.transferred_bytes + migrated_w2.transferred_bytes
+        )
+        weight_migration_sample_bad_bytes = (
+            migrated_w1.sample_bad_bytes + migrated_w2.sample_bad_bytes
+        )
+        weight_migration_sampled_bytes = (
+            migrated_w1.sampled_bytes + migrated_w2.sampled_bytes
+        )
+        if weight_migration_sample_bad_bytes:
+            raise AssertionError("migrated Sonic expert sample-byte gate failed")
+
+    experimental_replica_preload_ms = 0.0
+    experimental_replica_copy_bytes = 0
+    if experimental_replica_plan is not None and experimental_slot_map is not None:
+        # Process-group creation is process-lifetime setup, not measured preload.
+        pair_groups = {
+            (left, right): dist.new_group(ranks=[left, right])
+            for left in range(world)
+            for right in range(left + 1, world)
+        }
+        torch.cuda.synchronize()
+        dist.barrier()
+        preload_start = time.perf_counter()
+        experimental_replica_copy_bytes += copy_replica_bank(
+            w1,
+            placement,
+            experimental_replica_plan.replicas,
+            experimental_slot_map,
+            rank,
+            pair_groups,
+        )
+        experimental_replica_copy_bytes += copy_replica_bank(
+            w2,
+            placement,
+            experimental_replica_plan.replicas,
+            experimental_slot_map,
+            rank,
+            pair_groups,
+        )
+        torch.cuda.synchronize()
+        dist.barrier()
+        preload_local = torch.tensor(
+            (time.perf_counter() - preload_start) * 1e3,
+            dtype=torch.float64,
+            device=device,
+        )
+        rank_max(preload_local)
+        experimental_replica_preload_ms = float(preload_local)
+        copied = torch.tensor(
+            experimental_replica_copy_bytes, dtype=torch.int64, device=device
+        )
+        dist.all_reduce(copied, op=dist.ReduceOp.SUM)
+        experimental_replica_copy_bytes = int(copied)
     config = Mxfp8MoEKernelConfig(
         fc1_tile_m=args.fc1_tile_m,
         fc1_tile_n=args.fc1_tile_n,
@@ -262,8 +470,17 @@ def main() -> int:
         pingpong=not args.disable_pingpong,
     )
 
-    def forward(with_events: bool = False, transport_override: str | None = None):
+    def forward(
+        with_events: bool = False,
+        transport_override: str | None = None,
+        plan_override=None,
+        experts_override: int | None = None,
+        weights_override: tuple[BlockScaledOperand, BlockScaledOperand] | None = None,
+    ):
         transport_mode = transport_override or args.activation_transport
+        active_plan = plan_override or dispatch_plan
+        active_experts = experts_override or physical_experts
+        active_w1, active_w2 = weights_override or (w1, w2)
         events: list[tuple[torch.cuda.Event, torch.cuda.Event]] = []
         total_start = torch.cuda.Event(enable_timing=True)
         total_end = torch.cuda.Event(enable_timing=True)
@@ -282,17 +499,17 @@ def main() -> int:
 
         def dispatch_stage():
             if transport_mode == "bf16":
-                return dispatch_deduplicated(x, dispatch_plan)
+                return dispatch_deduplicated(x, active_plan)
             source_q, source_sf = quantize_mxfp8_rows(x)
             # NCCL treats scale factors as payload bytes.  Moving the uint8
             # view avoids relying on collective support for the new E8M0 dtype.
             return dispatch_deduplicated(
-                source_q, dispatch_plan, scales=source_sf.view(torch.uint8)
+                source_q, active_plan, scales=source_sf.view(torch.uint8)
             )
 
         dispatched = stage(dispatch_stage)
         pair_x, _, recv_token, pair_weights, indptr = stage(
-            lambda: expand_and_sort(dispatched, local_experts)
+            lambda: expand_and_sort(dispatched, active_experts)
         )
         if pair_x.shape[0] == 0:
             raise RuntimeError("empty destination ranks are not supported by this benchmark")
@@ -310,8 +527,12 @@ def main() -> int:
             return make_varlen_m_operand(pair_x, linear_sf, indptr)
 
         fc1_input = stage(pack_fc1)
-        postact = stage(lambda: mxfp8_swiglu_grouped(fc1_input, w1, indptr, config=config))
-        pair_out = stage(lambda: mxfp8_down_grouped(postact, w2, indptr, config=config))
+        postact = stage(
+            lambda: mxfp8_swiglu_grouped(fc1_input, active_w1, indptr, config=config)
+        )
+        pair_out = stage(
+            lambda: mxfp8_down_grouped(postact, active_w2, indptr, config=config)
+        )
 
         def reduce_stage():
             reduced = torch.zeros(
@@ -321,7 +542,7 @@ def main() -> int:
             return reduced.to(torch.bfloat16)
 
         reduced = stage(reduce_stage)
-        out = stage(lambda: combine_deduplicated(reduced, dispatch_plan, args.tokens))
+        out = stage(lambda: combine_deduplicated(reduced, active_plan, args.tokens))
         total_end.record()
         return out, events, (total_start, total_end), int(pair_x.shape[0])
 
@@ -346,6 +567,70 @@ def main() -> int:
     )
     rank_max(transport_numeric[:2])
     dist.all_reduce(transport_numeric[2:], op=dist.ReduceOp.MIN)
+
+    placement_numeric = torch.zeros(4, dtype=torch.float64, device=device)
+    if initial_weight_bank is not None:
+        baseline = forward(
+            False,
+            "mxfp8",
+            initial_dispatch_plan,
+            local_experts,
+            initial_weight_bank,
+        )[0]
+        candidate = forward(
+            False, "mxfp8", placement_dispatch_plan, physical_experts
+        )[0]
+        torch.cuda.synchronize()
+        difference = candidate.float() - baseline.float()
+        bad = difference.abs() > 0.05 + 0.05 * baseline.float().abs()
+        placement_numeric[:] = torch.tensor(
+            [
+                float(bad.sum()),
+                float(difference.abs().max()),
+                float(difference.abs().mean()),
+                float(
+                    torch.linalg.vector_norm(difference)
+                    / torch.linalg.vector_norm(baseline.float()).clamp_min(1e-20)
+                ),
+            ],
+            dtype=torch.float64,
+            device=device,
+        )
+        rank_max(placement_numeric)
+        if int(placement_numeric[0]):
+            raise AssertionError(
+                f"real placement migration numerical gate failed: {placement_numeric.tolist()}"
+            )
+        initial_weight_bank = None
+
+    experimental_replica_numeric = torch.zeros(4, dtype=torch.float64, device=device)
+    if experimental_replica_plan is not None:
+        baseline = forward(
+            False, "mxfp8", placement_dispatch_plan, physical_experts
+        )[0]
+        candidate = forward(False, "mxfp8", dispatch_plan, physical_experts)[0]
+        torch.cuda.synchronize()
+        difference = candidate.float() - baseline.float()
+        bad = difference.abs() > 0.05 + 0.05 * baseline.float().abs()
+        experimental_replica_numeric[:] = torch.tensor(
+            [
+                float(bad.sum()),
+                float(difference.abs().max()),
+                float(difference.abs().mean()),
+                float(
+                    torch.linalg.vector_norm(difference)
+                    / torch.linalg.vector_norm(baseline.float()).clamp_min(1e-20)
+                ),
+            ],
+            dtype=torch.float64,
+            device=device,
+        )
+        rank_max(experimental_replica_numeric)
+        if int(experimental_replica_numeric[0]):
+            raise AssertionError(
+                "experimental replica numerical gate failed: "
+                f"{experimental_replica_numeric.tolist()}"
+            )
 
     cold_start = time.perf_counter()
     forward(False)
@@ -426,6 +711,7 @@ def main() -> int:
             "top_k": args.top_k,
             "global_experts": args.experts,
             "local_experts": local_experts,
+            "local_physical_experts": physical_experts,
             "hidden": args.hidden,
             "intermediate_after_swiglu": args.intermediate,
             "fc1_physical_output": 2 * args.intermediate,
@@ -433,7 +719,14 @@ def main() -> int:
             "zipf_alpha": args.zipf_alpha if args.routing == "zipf" else None,
             "hot_experts": args.hot_experts if args.routing == "hotset" else None,
             "hot_mass": args.hot_mass if args.routing == "hotset" else None,
-            "routing_trace_path": args.routing_trace or None,
+            # Store only the basename so published JSONL cannot disclose a
+            # workstation username or private directory layout.
+            "routing_trace_file": Path(args.routing_trace).name
+            if args.routing_trace
+            else None,
+            "routing_trace_path": Path(args.routing_trace).name
+            if args.routing_trace
+            else None,
             "routing_trace_sha256": trace_sha256,
             "placement": args.placement,
             "eplb_policy": "static_equal_capacity_lpt_current_histogram"
@@ -441,6 +734,7 @@ def main() -> int:
             else None,
             "placement_plan_ms": placement_plan_ms,
             "placement_moved_experts": placement_moved_experts,
+            "migration_limit": args.migration_limit,
             "initial_rank_pair_loads": initial_values,
             "placement_rank_pair_loads": placement_values,
             "initial_rank_max_over_mean": max(initial_values)
@@ -450,6 +744,52 @@ def main() -> int:
             "expert_weight_scale_bytes": bytes_per_expert,
             "placement_logical_copy_bytes": placement_moved_experts * bytes_per_expert,
             "placement_migration_in_timed_forward": False,
+            "real_weight_migration_enabled": args.real_weight_migration,
+            "weight_migration_ms": weight_migration_ms,
+            "weight_migration_transferred_bytes": weight_migration_bytes,
+            "weight_migration_sample_bad_bytes": weight_migration_sample_bad_bytes,
+            "weight_migration_sampled_bytes": weight_migration_sampled_bytes,
+            "placement_migration_correctness": {
+                "bad_count": int(placement_numeric[0]),
+                "max_abs": float(placement_numeric[1]),
+                "mean_abs": float(placement_numeric[2]),
+                "relative_l2": float(placement_numeric[3]),
+            }
+            if placement_moved_experts and args.real_weight_migration
+            else None,
+            "experimental_replica": {
+                "status": (
+                    "experimental_opt_in_active"
+                    if experimental_replica_plan is not None
+                    else (
+                        "experimental_requested_no_plan"
+                        if args.experimental_replica_slots
+                        else "experimental_default_off"
+                    )
+                ),
+                "requested_slots_per_rank": args.experimental_replica_slots,
+                "active_slots_per_rank": args.experimental_replica_slots
+                if experimental_replica_plan is not None
+                else 0,
+                "max_copies_per_expert": args.experimental_max_copies_per_expert,
+                "minimum_hot_expert_ratio": args.experimental_minimum_hot_expert_ratio,
+                "replica_map": experimental_replica_plan.replicas
+                if experimental_replica_plan is not None
+                else {},
+                "predicted_rank_pair_loads": experimental_replica_loads.tolist()
+                if experimental_replica_loads is not None
+                else None,
+                "preload_ms": experimental_replica_preload_ms,
+                "direct_copy_bytes_collective_sum": experimental_replica_copy_bytes,
+                "correctness": {
+                    "bad_count": int(experimental_replica_numeric[0]),
+                    "max_abs": float(experimental_replica_numeric[1]),
+                    "mean_abs": float(experimental_replica_numeric[2]),
+                    "relative_l2": float(experimental_replica_numeric[3]),
+                }
+                if experimental_replica_plan is not None
+                else None,
+            },
             "seed": args.seed,
             "warmup": args.warmup,
             "iterations": args.iters,
@@ -499,9 +839,11 @@ def main() -> int:
             / (total_summary["p50_ms"] / 1e3),
             "peak_allocated_bytes": int(peak),
             "scope_note": (
-                "Steady-state forward excludes static EPLB planning and weight movement; "
-                "those costs are emitted separately and migration is measured by the "
-                "MXFP8 migration benchmark."
+                "Steady-state forward excludes static EPLB planning and weight movement. "
+                "When real_weight_migration_enabled is true, this invocation performed "
+                "and audited that movement before timing; otherwise placement is the "
+                "historical logical steady-state model only. Replica/hybrid is an "
+                "experimental, explicit opt-in path and is disabled by the stable suite."
             ),
         }
         output = Path(args.output)

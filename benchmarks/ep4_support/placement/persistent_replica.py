@@ -1,9 +1,16 @@
+"""EXPERIMENTAL replica planner used by comparison wrappers.
+
+This older generic path is retained for reproducibility.  It is not part of
+the stable Sonic EPLB suite; new Sonic experiments use the explicitly named
+``experimental_sonic_replica`` module.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
+
 import torch
 
-from .static_greedy import placement_rank_loads
 from ep4_support.transport import local_expert_indices
 
 

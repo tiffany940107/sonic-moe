@@ -46,7 +46,7 @@ pip install -e .
 
 ### Experimental SM120 MXFP8 grouped inference
 
-The `feature/sm120-mxfp8-varlen-ep` branch adds an inference-only MXFP8
+The `feature/sm120-mxfp8-eplb-runtime` branch extends the inference-only MXFP8
 compute primitive for rows that have already been routed and grouped by local
 expert. It uses OCP E4M3 values, E8M0 scales with semantic 1x32 granularity
 along K, a variable-M grouped GEMM, fused SwiGLU + MXFP8 requantization for
@@ -59,7 +59,7 @@ physical scale tensor uses QuACK/CUTLASS's blocked layout
 buffer.
 
 ```bash
-git clone --branch feature/sm120-mxfp8-varlen-ep \
+git clone --branch feature/sm120-mxfp8-eplb-runtime \
   https://github.com/tiffany940107/sonic-moe.git
 cd sonic-moe
 python -m pip install -r requirements-mxfp8.txt
@@ -131,15 +131,19 @@ orientations. Here M means the total local rows across groups. Use
 packing, allocation, and cold kernel compilation are deliberately outside the
 reported kernel latency; every JSON record includes the full `M_e` list.
 
-This extension does not change the existing BF16 `MoE.forward()` path and does
-not implement routing, token permutation, expert-parallel transport, or EPLB.
-Those layers should call the grouped primitive after producing local
-expert-contiguous rows.
+This extension does not change the existing BF16 `MoE.forward()` path.  The
+installable `sonicmoe` package remains a local grouped-compute primitive;
+benchmark/runtime support supplies routing, token permutation, EP4 transport,
+windowed EPLB, and real expert migration around that primitive.
 
 The experimental external EP4 wrappers do not change that library boundary.
 Their customer-shape scripts, balanced/imbalance results, topology caveats,
 and MegaMoE IBGDA correctness status are documented in the
 [EP4 system report](benchmark_results/sm120-mxfp8-dense-vs-grouped/ep4/README.md).
+The new 512-expert, top-k 32, 8K/16K/32K/46,080-token workload and the
+Sonic EP4 + EPLB runtime prototype are documented in the
+[windowed EPLB report](benchmark_results/sm120-mxfp8-eplb/README.md).
+Hot-expert replica/hybrid support is experimental and disabled by default.
 The aligned single-GPU Sonic versus FlashInfer old/PR #4660 results are in
 [the kernel comparison](benchmark_results/sm120-mxfp8-dense-vs-grouped/FLASHINFER_VS_SONIC.md).
 
