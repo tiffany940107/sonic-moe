@@ -43,8 +43,11 @@ from ep4_support.routing import (
 )
 from ep4_support.transport import (
     actual_dispatch_bytes,
+    allocate_transport_workspace,
     combine_deduplicated,
+    combine_deduplicated_out,
     dispatch_deduplicated,
+    dispatch_deduplicated_out,
     expand_and_sort,
     make_dispatch_plan,
 )
@@ -192,9 +195,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="bracket only timed iterations for external profiler capture",
     )
+    parser.add_argument(
+        "--allocator-stage-audit",
+        action="store_true",
+        help="run one untimed forward and report caching-allocator deltas by E0 stage",
+    )
     parser.add_argument("--stability", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--run-label", default="")
+    parser.add_argument(
+        "--implementation-label",
+        default="current",
+        help="privacy-safe result discriminator for before/after formal matrices",
+    )
     parser.add_argument(
         "--node-label",
         default="anonymous",
@@ -210,6 +223,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not re.fullmatch(r"[A-Za-z0-9_-]+", args.node_label):
         parser.error("--node-label must be a privacy-safe public alias")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", args.implementation_label):
+        parser.error("--implementation-label must be privacy-safe")
     if args.migration_limit < 0:
         parser.error("--migration-limit must be non-negative")
     if args.reference_chunk_pairs <= 0:
@@ -566,6 +581,9 @@ def main() -> int:
     mlp_workspace = None
     route_workspace = None
     reduce_workspace = None
+    transport_workspace = None
+    allocator_stage_records: list[dict[str, int | str]] = []
+    capture_allocator_stages = False
 
     def forward(
         with_events: bool = False,
@@ -589,6 +607,7 @@ def main() -> int:
         if data_path not in ("baseline", "reference_chunked") and not optimized_eligible:
             data_path = "baseline"
         use_workspace = data_path not in ("baseline", "reference_chunked")
+        use_transport_workspace = use_workspace and optimized_eligible
         use_route_pack = data_path in (
             "route_pack",
             "fused",
@@ -616,8 +635,41 @@ def main() -> int:
             if args.nvtx:
                 torch.cuda.nvtx.range_push(name)
             if not with_events:
+                allocator_before_stage = (
+                    torch.cuda.memory_stats() if capture_allocator_stages else None
+                )
                 try:
-                    return fn()
+                    value = fn()
+                    if allocator_before_stage is not None:
+                        allocator_after_stage = torch.cuda.memory_stats()
+                        allocator_stage_records.append(
+                            {
+                                "stage": name,
+                                "allocated": int(
+                                    allocator_after_stage.get(
+                                        "allocation.all.allocated", 0
+                                    )
+                                    - allocator_before_stage.get(
+                                        "allocation.all.allocated", 0
+                                    )
+                                ),
+                                "freed": int(
+                                    allocator_after_stage.get("allocation.all.freed", 0)
+                                    - allocator_before_stage.get(
+                                        "allocation.all.freed", 0
+                                    )
+                                ),
+                                "segments_allocated": int(
+                                    allocator_after_stage.get(
+                                        "segment.all.allocated", 0
+                                    )
+                                    - allocator_before_stage.get(
+                                        "segment.all.allocated", 0
+                                    )
+                                ),
+                            }
+                        )
+                    return value
                 finally:
                     if args.nvtx:
                         torch.cuda.nvtx.range_pop()
@@ -643,9 +695,16 @@ def main() -> int:
             )
             # NCCL treats scale factors as payload bytes.  Moving the uint8
             # view avoids relying on collective support for the new E8M0 dtype.
-            return dispatch_deduplicated(
-                source_q, active_plan, scales=source_sf.view(torch.uint8)
-            )
+            source_scales = source_sf.view(torch.uint8)
+            if use_transport_workspace:
+                assert transport_workspace is not None
+                return dispatch_deduplicated_out(
+                    source_q,
+                    active_plan,
+                    transport_workspace,
+                    scales=source_scales,
+                )
+            return dispatch_deduplicated(source_q, active_plan, scales=source_scales)
 
         dispatched = stage(dispatch_stage, "dispatch_quant_a2a")
         if use_route_pack:
@@ -821,7 +880,11 @@ def main() -> int:
 
         reduced = stage(reduce_stage, "local_reduce")
         out = stage(
-            lambda: combine_deduplicated(reduced, active_plan, args.tokens),
+            lambda: combine_deduplicated_out(
+                reduced, active_plan, args.tokens, transport_workspace
+            )
+            if use_transport_workspace
+            else combine_deduplicated(reduced, active_plan, args.tokens),
             "combine",
         )
         total_end.record()
@@ -891,6 +954,19 @@ def main() -> int:
             include_fp32=args.data_path not in ("fused_segmented",),
         )
         if args.data_path != "baseline"
+        else None
+    )
+    transport_workspace = (
+        allocate_transport_workspace(
+            dispatch_plan,
+            prequantized_source[0],
+            prequantized_source[1].view(torch.uint8),
+            args.tokens,
+            args.hidden,
+            torch.bfloat16,
+        )
+        if args.data_path not in ("baseline", "reference_chunked")
+        and prequantized_source is not None
         else None
     )
     selected_path_out = forward(False, "mxfp8", data_path_override=args.data_path)[0]
@@ -1029,6 +1105,32 @@ def main() -> int:
         forward(False)
     torch.cuda.synchronize()
     dist.barrier()
+
+    if args.allocator_stage_audit:
+        allocator_stage_records.clear()
+        allocator_audit_before = torch.cuda.memory_stats()
+        capture_allocator_stages = True
+        forward(False)
+        torch.cuda.synchronize()
+        capture_allocator_stages = False
+        allocator_audit_after = torch.cuda.memory_stats()
+        allocator_stage_records.append(
+            {
+                "stage": "__forward_total__",
+                "allocated": int(
+                    allocator_audit_after.get("allocation.all.allocated", 0)
+                    - allocator_audit_before.get("allocation.all.allocated", 0)
+                ),
+                "freed": int(
+                    allocator_audit_after.get("allocation.all.freed", 0)
+                    - allocator_audit_before.get("allocation.all.freed", 0)
+                ),
+                "segments_allocated": int(
+                    allocator_audit_after.get("segment.all.allocated", 0)
+                    - allocator_audit_before.get("segment.all.allocated", 0)
+                ),
+            }
+        )
 
     allocator_stat_keys = (
         "allocation.all.allocated",
@@ -1214,6 +1316,8 @@ def main() -> int:
             "timing_scope": "E0_prequantized" if args.prequantized_source else "E1_source_quantized",
             "source_quantization_in_timed_forward": not args.prequantized_source,
             "data_path": args.data_path,
+            "implementation_label": args.implementation_label,
+            "transport_workspace_enabled": transport_workspace is not None,
             "heavy_expert_first": args.heavy_expert_first,
             "weighted_reduce_policy": (
                 "segmented"
@@ -1253,9 +1357,19 @@ def main() -> int:
                 "weighted_reduce": (
                     reduce_workspace.nbytes if reduce_workspace is not None else 0
                 ),
+                "transport": (
+                    transport_workspace.nbytes
+                    if transport_workspace is not None
+                    else 0
+                ),
                 "total": sum(
                     workspace.nbytes
-                    for workspace in (mlp_workspace, route_workspace, reduce_workspace)
+                    for workspace in (
+                        mlp_workspace,
+                        route_workspace,
+                        reduce_workspace,
+                        transport_workspace,
+                    )
                     if workspace is not None
                 ),
             },
@@ -1308,6 +1422,9 @@ def main() -> int:
                 key: int(allocator_delta[index])
                 for index, key in enumerate(allocator_stat_keys)
             },
+            "allocator_stage_audit": allocator_stage_records
+            if args.allocator_stage_audit
+            else None,
             "scope_note": (
                 "Steady-state forward excludes static EPLB planning and weight movement. "
                 "When real_weight_migration_enabled is true, this invocation performed "

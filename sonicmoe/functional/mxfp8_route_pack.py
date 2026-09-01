@@ -44,6 +44,32 @@ def _expert_histogram_kernel(
 
 
 @triton.jit
+def _expert_prefix_kernel(
+    counts,
+    indptr,
+    cursors,
+    num_experts: tl.constexpr,
+    BLOCK: tl.constexpr,
+):
+    """Exclusive scan for the bounded physical-expert domain.
+
+    ``torch.cumsum(..., out=...)`` still requests a temporary caching-allocator
+    block on every invocation.  One Triton program is sufficient for the
+    E_local <= 144 domain used by EP4 plus replica reserve slots and keeps the
+    route-pack stage allocation-free.
+    """
+
+    offsets = tl.arange(0, BLOCK)
+    valid = offsets < num_experts
+    values = tl.load(counts + offsets, mask=valid, other=0).to(tl.int32)
+    inclusive = tl.cumsum(values, axis=0)
+    exclusive = inclusive - values
+    tl.store(indptr + offsets, exclusive, mask=valid)
+    tl.store(cursors + offsets, exclusive, mask=valid)
+    tl.store(indptr + num_experts, tl.sum(values, axis=0))
+
+
+@triton.jit
 def _assign_route_positions_kernel(
     expert_ids,
     weights,
@@ -302,9 +328,15 @@ def route_pack_mxfp8(
         num_experts=workspace.local_experts,
         BLOCK=256,
     )
-    workspace.indptr[0].zero_()
-    torch.cumsum(workspace.counts, dim=0, out=workspace.indptr[1:])
-    workspace.cursors.copy_(workspace.indptr[:-1])
+    prefix_block = triton.next_power_of_2(workspace.local_experts)
+    _expert_prefix_kernel[(1,)](
+        workspace.counts,
+        workspace.indptr,
+        workspace.cursors,
+        num_experts=workspace.local_experts,
+        BLOCK=prefix_block,
+        num_warps=4,
+    )
     _assign_route_positions_kernel[(triton.cdiv(num_slots, 256),)](
         expert_ids,
         weights,
