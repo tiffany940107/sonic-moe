@@ -237,6 +237,65 @@ def test_replica_recommendation_is_explicitly_opt_in():
     assert decision.route_map_version == 0
 
 
+def test_single_hot_replica_bypasses_mild_rank_ratio_after_persistence():
+    placement = contiguous_placement(512, 4)
+    loads = persistent_single_hot_counts(BASE_TOKENS)
+    assert float(placement_rank_loads(loads, placement, 4).max()) / float(
+        placement_rank_loads(loads, placement, 4).double().mean()
+    ) < 1.15
+    controller = WindowedEPLB(
+        placement,
+        4,
+        window=1,
+        update_interval=1,
+        persistence_windows=2,
+        migration_limit=512,
+        minimum_saving_ms=0.0,
+        enable_experimental_replica=True,
+        replica_slots_per_rank=1,
+    )
+    first = controller.observe(
+        loads, unoptimized_step_ms=33.9, reconfiguration_ms=359.4
+    )
+    assert first.reason == "await_persistence"
+    decision = controller.observe(
+        loads,
+        unoptimized_step_ms=33.9,
+        reconfiguration_ms=359.4,
+        amortization_horizon_steps=160,
+    )
+    assert decision.action == "experimental_replica"
+    assert decision.reason == "prefer_experimental_replica"
+    assert decision.experimental and not decision.applied
+    assert decision.rank_ratio < 1.15
+    assert decision.hot_expert_ratio >= 16.0
+    assert decision.break_even_steps < 160
+
+
+def test_single_hot_replica_respects_amortization_horizon():
+    loads = persistent_single_hot_counts(BASE_TOKENS)
+    controller = WindowedEPLB(
+        contiguous_placement(512, 4),
+        4,
+        window=1,
+        update_interval=1,
+        persistence_windows=1,
+        minimum_saving_ms=0.0,
+        enable_experimental_replica=True,
+        replica_slots_per_rank=1,
+    )
+    decision = controller.observe(
+        loads,
+        unoptimized_step_ms=33.9,
+        reconfiguration_ms=359.4,
+        amortization_horizon_steps=64,
+    )
+    assert decision.action == "experimental_replica"
+    assert decision.reason == "replica_amortization_horizon_exceeded"
+    assert decision.break_even_steps > 64
+    assert not decision.applied
+
+
 def test_experimental_replica_quota_conserves_every_pair():
     placement = contiguous_placement(512, 4)
     ids = torch.arange(32).repeat(4 * 128, 1)

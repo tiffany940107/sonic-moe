@@ -220,10 +220,14 @@ class WindowedEPLB:
 
         if len(self.history) < self.window or self.step % self.update_interval:
             return no_change("window_or_interval")
-        if rank_ratio < self.observe_threshold:
+        replica_signal = self.enable_experimental_replica and (
+            rank_ratio >= self.replica_threshold
+            or hot_expert_ratio >= self.replica_hot_expert_ratio
+        )
+        if rank_ratio < self.observe_threshold and not replica_signal:
             self._persistent_windows = 0
             return no_change("below_observe_threshold")
-        if rank_ratio < self.apply_threshold:
+        if rank_ratio < self.apply_threshold and not replica_signal:
             self._persistent_windows = 0
             return no_change("ema_only")
 
@@ -233,11 +237,10 @@ class WindowedEPLB:
         full_remote_records = remote_records(full_target)
         full_candidate_ms = candidate_cost(full_after, full_remote_records)
 
-        if (
-            self.enable_experimental_replica
-            and rank_ratio >= self.replica_threshold
-            and hot_expert_ratio >= self.replica_hot_expert_ratio
-        ):
+        if self._persistent_windows < self.persistence_windows:
+            return no_change("await_persistence", predicted_after=full_after)
+
+        if replica_signal and hot_expert_ratio >= self.replica_hot_expert_ratio:
             # Importing here makes the stable controller independent from the
             # experimental replica implementation and its evolving API.
             from .experimental_sonic_replica import plan_replicas
@@ -255,6 +258,26 @@ class WindowedEPLB:
                 saving = unoptimized_step_ms * (
                     predicted_before - replica_after
                 ) / max(1, predicted_before)
+                if saving < self.minimum_saving_ms:
+                    return no_change(
+                        "replica_benefit_too_small",
+                        action="experimental_replica",
+                        predicted_after=replica_after,
+                        saving_ms=saving,
+                        experimental=True,
+                    )
+                break_even_steps = reconfiguration_ms / saving
+                if (
+                    amortization_horizon_steps is not None
+                    and break_even_steps > amortization_horizon_steps
+                ):
+                    return no_change(
+                        "replica_amortization_horizon_exceeded",
+                        action="experimental_replica",
+                        predicted_after=replica_after,
+                        saving_ms=saving,
+                        experimental=True,
+                    )
                 return no_change(
                     "prefer_experimental_replica",
                     action="experimental_replica",
@@ -263,8 +286,14 @@ class WindowedEPLB:
                     experimental=True,
                 )
 
-        if self._persistent_windows < self.persistence_windows:
-            return no_change("await_persistence", predicted_after=full_after)
+        # A hot expert can be severe while aggregate rank load still looks
+        # balanced.  If replication cannot beat whole-expert placement, do not
+        # fall through and migrate merely because the hot signal bypassed the
+        # rank-ratio observation gate.
+        if rank_ratio < self.observe_threshold:
+            return no_change("hot_expert_replica_not_beneficial")
+        if rank_ratio < self.apply_threshold:
+            return no_change("ema_only")
 
         full_saving = unoptimized_step_ms - full_candidate_ms
         if full_saving < self.minimum_saving_ms:
