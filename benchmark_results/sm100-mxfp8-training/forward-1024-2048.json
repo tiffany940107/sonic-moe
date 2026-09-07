@@ -1,0 +1,14 @@
+{
+  "gpu": "NVIDIA B200",
+  "torch": "2.14.0a0+4fdf77b940.nv26.08",
+  "shape": {"tokens": 1024, "experts": 8, "top_k": 2, "hidden": 2048, "intermediate": 2048},
+  "mode": "forward",
+  "optimizer_step": false,
+  "warmup": 5,
+  "repeats": 20,
+  "results": {
+    "sonicmoe": {"mean_ms": 0.5755248039960861, "p50_ms": 0.5802879929542542, "p95_ms": 0.5960639715194702, "p99_ms": 0.6058560013771057, "peak_allocated_mib": 444.1181640625},
+    "sonicmoe_mxfp8": {"mean_ms": 0.604691207408905, "p50_ms": 0.6056960225105286, "p95_ms": 0.6283199787139893, "p99_ms": 0.63264000415802, "peak_allocated_mib": 543.47802734375}
+  },
+  "mxfp8_speedup": 0.9580515165825895
+}

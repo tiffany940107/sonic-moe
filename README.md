@@ -69,6 +69,25 @@ x = torch.randn(32768, 4096, device="cuda", dtype=torch.bfloat16)
 output, aux_loss = moe(x, kernel_backend_moe=KernelBackendMoE.sonicmoe)
 ```
 
+### SM100 MXFP8 training
+
+The `feature/sm100-mxfp8-training` branch adds a complete SM100 MXFP8
+forward/backward path while retaining BF16 master parameters:
+
+```python
+output, aux_loss = moe(
+    x,
+    kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8,
+)
+loss = output.float().square().mean() + 0.01 * aux_loss.float()
+loss.backward()
+```
+
+Install the paired, commit-pinned Quack implementation with
+`requirements-sm100-mxfp8.txt`. See
+[the SM100 MXFP8 guide](docs/sm100_mxfp8_training.md) for requirements,
+inference usage, validation, and benchmark results.
+
 ## 🧪 Testing
 
 Run the test suite to verify correctness:
