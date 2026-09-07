@@ -65,6 +65,78 @@ def _compute_col_partial_sum_kernel(
     )
 
 
+def topk_router_workspace_shape(T: int, E: int, K: int) -> tuple[int, int]:
+    """Shape of the reusable tiled-histogram buffer for exact top-k routing."""
+    tokens_per_block = 1024 // triton.next_power_of_2(K)
+    return E, triton.cdiv(T, tokens_per_block)
+
+
+def TC_topk_router_metadata_triton_workspace(
+    topk_router_indices: torch.Tensor,
+    E: int,
+    expert_frequency: torch.Tensor,
+    expert_frequency_offset: torch.Tensor,
+    x_gather_idx: torch.Tensor,
+    s_scatter_idx: torch.Tensor,
+    s_reverse_scatter_idx: torch.Tensor,
+    col_partial_sum_trans: torch.Tensor,
+) -> None:
+    """Exact metadata path using a caller-owned histogram workspace."""
+    T, K = topk_router_indices.size()
+    TK = T * K
+    E_POW2 = triton.next_power_of_2(E)
+    K_POW2 = triton.next_power_of_2(K)
+    TOKENS_PER_BLOCK = 1024 // K_POW2
+    n_tiles = triton.cdiv(T, TOKENS_PER_BLOCK)
+    if col_partial_sum_trans.shape != (E, n_tiles):
+        raise ValueError(
+            f"router workspace must have shape {(E, n_tiles)}, "
+            f"got {tuple(col_partial_sum_trans.shape)}"
+        )
+
+    _compute_col_partial_sum_kernel[(n_tiles,)](
+        topk_router_indices,
+        col_partial_sum_trans,
+        T,
+        E,
+        n_tiles,
+        TOKENS_PER_TILE=TOKENS_PER_BLOCK,
+        K_POW2=K_POW2,
+        K=K,
+        E_POW2=E_POW2,
+    )
+    torch.sum(
+        col_partial_sum_trans,
+        dim=1,
+        dtype=torch.int32,
+        out=expert_frequency,
+    )
+    col_partial_sum = col_partial_sum_trans.T
+    _bitmatrix_metadata_compute_stage1[(E + 2,)](
+        expert_frequency,
+        expert_frequency_offset,
+        E,
+        col_partial_sum,
+        n_tiles,
+        TK,
+        BLOCK_M=128,
+        BLOCK_N=E_POW2,
+    )
+    _bitmatrix_metadata_compute_stage2[(n_tiles,)](
+        s_scatter_idx,
+        s_reverse_scatter_idx,
+        x_gather_idx,
+        topk_router_indices,
+        T,
+        col_partial_sum,
+        n_tiles,
+        expert_frequency_offset[:E],
+        K_POW2=K_POW2,
+        TOKENS_PER_BLOCK=TOKENS_PER_BLOCK,
+        K=K,
+    )
+
+
 @torch.library.custom_op(
     f"triton_kernels::TC_topk_router_metadata",
     mutates_args={
@@ -85,64 +157,19 @@ def TC_topk_router_metadata_triton(
     s_reverse_scatter_idx: torch.Tensor,
 ) -> None:
     T, K = topk_router_indices.size()
-    TK = T * K
     device = topk_router_indices.device
-    E_POW2 = triton.next_power_of_2(E)
-    K_POW2 = triton.next_power_of_2(K)
-    TOKENS_PER_BLOCK = 1024 // K_POW2
-    n_tiles = triton.cdiv(T, TOKENS_PER_BLOCK)
-
-    # ── Kernel 1: tiled histogram ─────────────────────────────────────────────
-    # col_partial_sum_trans[E, n_tiles]: raw per-expert-per-tile counts.
-    # Stored transposed so each CTA writes to its own column (tile_id), avoiding
-    # cross-CTA write conflicts. Transposed back to [n_tiles, E] for stage1/stage2.
-    col_partial_sum_trans = torch.empty(E, n_tiles, dtype=torch.int32, device=device)
-    _compute_col_partial_sum_kernel[(n_tiles,)](
-        topk_router_indices,
-        col_partial_sum_trans,
-        T,
-        E,
-        n_tiles,
-        TOKENS_PER_TILE=TOKENS_PER_BLOCK,
-        K_POW2=K_POW2,
-        K=K,
-        E_POW2=E_POW2,
+    col_partial_sum_trans = torch.empty(
+        topk_router_workspace_shape(T, E, K), dtype=torch.int32, device=device
     )
-
-    expert_frequency.copy_(col_partial_sum_trans.sum(dim=1, dtype=torch.int32))
-    col_partial_sum = col_partial_sum_trans.T  # [n_tiles, E]
-
-    # ── Kernel 2: stage1 ─────────────────────────────────────────────────────
-    # - For each expert e (pid < E): convert col_partial_sum[*, e] from raw
-    #   counts to exclusive prefix sums over tiles in-place.
-    # - For pid == E: write exclusive cumsum of expert_freq_offset into
-    #   expert_freq_off[0:E] (= col_offs, a view into expert_freq_off).
-
-    _bitmatrix_metadata_compute_stage1[(E + 2,)](
+    TC_topk_router_metadata_triton_workspace(
+        topk_router_indices,
+        E,
         expert_frequency,
         expert_frequency_offset,
-        E,
-        col_partial_sum,
-        n_tiles,
-        TK,
-        BLOCK_M=128,
-        BLOCK_N=E_POW2,
-    )
-
-    # ── Kernel 3: stage2 ─────────────────────────────────────────────────────
-    # For each tile: sort entries by expert, compute output positions, scatter.
-    _bitmatrix_metadata_compute_stage2[(n_tiles,)](
+        x_gather_idx,
         s_scatter_idx,
         s_reverse_scatter_idx,
-        x_gather_idx,
-        topk_router_indices,
-        T,
-        col_partial_sum,
-        n_tiles,
-        expert_frequency_offset[:E],
-        K_POW2=K_POW2,
-        TOKENS_PER_BLOCK=TOKENS_PER_BLOCK,
-        K=K,
+        col_partial_sum_trans,
     )
 
 
