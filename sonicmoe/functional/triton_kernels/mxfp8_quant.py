@@ -1293,6 +1293,66 @@ def _dense_dual_sgd_kernel(
         (aux2_value - learning_rate * aux2_grad).to(tl.bfloat16),
         mask=aux2_mask,
     )
+@triton.jit
+def _rowwise_linear_kernel(
+    x_ptr,
+    q_ptr,
+    sf_ptr,
+    M: tl.constexpr,
+    K: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    k_tile = tl.program_id(1)
+    offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
+    mask = (row < M) & (offsets < K)
+    values = tl.load(x_ptr + row * K + offsets, mask=mask, other=0.0).to(
+        tl.float32
+    )
+    groups = tl.reshape(values, [BLOCK_K // 32, 32])
+    amax = tl.max(tl.abs(groups), axis=1)
+    scale_byte, scale = _rceil_e8m0(amax)
+    scaled = tl.maximum(tl.minimum(groups / scale[:, None], 448.0), -448.0)
+    tl.store(
+        q_ptr + row * K + offsets,
+        tl.reshape(scaled, [BLOCK_K]).to(tl.float8e4nv),
+        mask=mask,
+    )
+    scale_offsets = k_tile * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
+    tl.store(
+        sf_ptr + row * (K // 32) + scale_offsets,
+        scale_byte.to(tl.uint8),
+        mask=(row < M) & (scale_offsets < K // 32),
+    )
+
+
+@triton.jit
+def _rowwise_dequant_kernel(
+    q_ptr,
+    sf_ptr,
+    out_ptr,
+    M: tl.constexpr,
+    K: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    row = tl.program_id(0)
+    k_tile = tl.program_id(1)
+    offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
+    mask = (row < M) & (offsets < K)
+    scale_byte = tl.load(
+        sf_ptr + row * (K // 32) + offsets // 32,
+        mask=mask,
+        other=1,
+    ).to(tl.int32)
+    # The quantizer uses exponent one as the finite divisor for the E8M0 zero
+    # byte. Quantized values in that group are zero, so this preserves the
+    # format's zero-group semantics while avoiding a flushed subnormal.
+    scale_bits = tl.maximum(scale_byte, 1) << 23
+    scale = scale_bits.to(tl.float32, bitcast=True)
+    values = tl.load(q_ptr + row * K + offsets, mask=mask, other=0.0).to(
+        tl.float32
+    )
+    tl.store(out_ptr + row * K + offsets, values * scale, mask=mask)
 
 
 def _validate(
@@ -1334,6 +1394,95 @@ def _check_outputs(
         raise ValueError(f"scale must have shape {sf_shape} and E8M0 dtype")
     if not qdata.is_contiguous() or not scale.is_contiguous():
         raise ValueError("qdata and scale outputs must be contiguous")
+
+
+def quantize_mxfp8_rows(
+    x: torch.Tensor,
+    *,
+    qdata_out: torch.Tensor | None = None,
+    scale_out: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize contiguous rows and keep E8M0 scales in transport layout.
+
+    The returned scale tensor has shape ``(M, K / 32)``. Unlike grouped-GEMM
+    operands, it has no expert padding and can be sent as raw bytes by NCCL.
+    """
+    if (
+        x.ndim != 2
+        or x.dtype not in (torch.bfloat16, torch.float32)
+        or not x.is_cuda
+        or not x.is_contiguous()
+    ):
+        raise ValueError("x must be a contiguous two-dimensional CUDA BF16/FP32 tensor")
+    rows, cols = x.shape
+    if cols % _SF_VEC:
+        raise ValueError(f"K={cols} must be divisible by {_SF_VEC}")
+    q_shape = (rows, cols)
+    sf_shape = (rows, cols // _SF_VEC)
+    qdata = (
+        torch.empty(q_shape, dtype=MXFP8_E4M3.qdata_dtype, device=x.device)
+        if qdata_out is None
+        else qdata_out
+    )
+    scale = (
+        torch.empty(sf_shape, dtype=MXFP8_E4M3.scale_dtype, device=x.device)
+        if scale_out is None
+        else scale_out
+    )
+    _check_outputs(qdata, scale, q_shape, sf_shape)
+    if rows:
+        block_k = 128
+        _rowwise_linear_kernel[(rows, triton.cdiv(cols, block_k))](
+            x,
+            qdata,
+            scale.view(torch.uint8),
+            M=rows,
+            K=cols,
+            BLOCK_K=block_k,
+            num_warps=4,
+        )
+    return qdata, scale
+
+
+def dequantize_mxfp8_rows(
+    qdata: torch.Tensor,
+    scale: torch.Tensor,
+    *,
+    out: torch.Tensor | None = None,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor:
+    """Dequantize transport-layout MXFP8 rows into a caller-owned tensor."""
+    if qdata.ndim != 2 or qdata.dtype != MXFP8_E4M3.qdata_dtype:
+        raise TypeError("qdata must be a two-dimensional E4M3 tensor")
+    rows, cols = qdata.shape
+    if scale.shape != (rows, cols // _SF_VEC) or scale.dtype not in (
+        MXFP8_E4M3.scale_dtype,
+        torch.uint8,
+    ):
+        raise TypeError("scale must have shape (M, K / 32) and E8M0/uint8 dtype")
+    if dtype not in (torch.bfloat16, torch.float32):
+        raise TypeError("dequantized rows must use BF16 or FP32")
+    result = (
+        torch.empty((rows, cols), dtype=dtype, device=qdata.device)
+        if out is None
+        else out
+    )
+    if result.shape != qdata.shape or result.dtype != dtype or not result.is_contiguous():
+        raise ValueError("out must be contiguous with the requested shape and dtype")
+    if scale.device != qdata.device or result.device != qdata.device:
+        raise ValueError("qdata, scale, and out must be on the same device")
+    if rows:
+        block_k = 256
+        _rowwise_dequant_kernel[(rows, triton.cdiv(cols, block_k))](
+            qdata,
+            scale.view(torch.uint8),
+            result,
+            M=rows,
+            K=cols,
+            BLOCK_K=block_k,
+            num_warps=4,
+        )
+    return result
 
 
 def quantize_mxfp8_weight(
@@ -2414,11 +2563,13 @@ def quantize_mxfp8_varlen_iso32_dual(
 
 
 __all__ = [
+    "dequantize_mxfp8_rows",
     "launch_sgd_update_and_quantize_mxfp8_weight",
     "launch_sgd_update_and_quantize_mxfp8_weight_dual",
     "quantize_mxfp8_gather_varlen_m",
     "quantize_mxfp8_varlen_dual",
     "quantize_mxfp8_varlen_iso32_dual",
+    "quantize_mxfp8_rows",
     "quantize_mxfp8_varlen_k",
     "quantize_mxfp8_varlen_k_pair",
     "quantize_mxfp8_varlen_m",

@@ -5,7 +5,12 @@ import itertools
 
 import pytest
 import torch
-from quack.blockscaled import MXFP8_E4M3, BlockScaledOperand, unpack_scale_blocked_to_2d
+from quack.blockscaled import (
+    MXFP8_E4M3,
+    BlockScaledOperand,
+    to_mx_compiled,
+    unpack_scale_blocked_to_2d,
+)
 from quack.blockscaled import (
     quantize_mxfp8_gather_varlen_m as quantize_mxfp8_gather_varlen_m_ref,
 )
@@ -22,7 +27,9 @@ from sonicmoe.functional.triton_kernels import (
     topk_router_workspace_shape,
 )
 from sonicmoe.functional.triton_kernels.mxfp8_quant import (
+    dequantize_mxfp8_rows,
     quantize_mxfp8_gather_varlen_m,
+    quantize_mxfp8_rows,
     quantize_mxfp8_varlen_dual,
     quantize_mxfp8_varlen_iso32_dual,
     quantize_mxfp8_varlen_k,
@@ -75,6 +82,30 @@ def _active_varlen_k_scales(operand, cu):
             for e in range(cu.numel() - 1)
         ]
     )
+
+
+def test_transport_row_quantization_matches_quack_and_reuses_outputs():
+    _skip_if_not_sm100()
+    torch.manual_seed(101)
+    x = torch.randn(73, 256, dtype=torch.bfloat16, device="cuda")
+    expected_q, expected_scale = to_mx_compiled(x)
+    qdata = torch.empty_like(expected_q)
+    scale = torch.empty_like(expected_scale)
+    actual_q, actual_scale = quantize_mxfp8_rows(
+        x, qdata_out=qdata, scale_out=scale
+    )
+    assert actual_q is qdata and actual_scale is scale
+    assert torch.equal(actual_q, expected_q)
+    assert torch.equal(actual_scale.view(torch.uint8), expected_scale.view(torch.uint8))
+
+    dequant = torch.empty_like(x)
+    actual = dequantize_mxfp8_rows(actual_q, actual_scale, out=dequant)
+    expected = (
+        expected_q.float()
+        * expected_scale.float().repeat_interleave(MXFP8_E4M3.sf_vec_size, dim=-1)
+    ).to(torch.bfloat16)
+    assert actual is dequant
+    assert torch.equal(actual, expected)
 
 
 def test_routed_varlen_m_quantization_matches_quack():
