@@ -9,8 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .enums import ActivationType, KernelBackendMoE, is_glu
-from .functional import moe_TC_softmax_topk_layer
-
+from .functional import moe_TC_softmax_topk_layer, moe_TC_softmax_topk_layer_mxfp8
+from .functional.mxfp8 import Mxfp8Workspace
 
 try:
     from xma.modules.moe import scattered_experts
@@ -203,6 +203,7 @@ class MoE(nn.Module):
         )
 
         self.stream_id = torch.cuda.current_stream().cuda_stream
+        self._mxfp8_workspace = Mxfp8Workspace()
 
     def forward(
         self,
@@ -215,8 +216,21 @@ class MoE(nn.Module):
         # hidden_states -> (batch_size, query_length, hidden_size)
         hidden_states = hidden_states.view(-1, self.hidden_size)
 
-        if kernel_backend_moe == KernelBackendMoE.sonicmoe and self.num_experts <= 32768:
-            hidden_states, router_logits, expert_frequency = moe_TC_softmax_topk_layer(
+        if kernel_backend_moe in (
+            KernelBackendMoE.sonicmoe,
+            KernelBackendMoE.sonicmoe_mxfp8,
+        ) and self.num_experts <= 32768:
+            moe_fn = (
+                moe_TC_softmax_topk_layer_mxfp8
+                if kernel_backend_moe == KernelBackendMoE.sonicmoe_mxfp8
+                else moe_TC_softmax_topk_layer
+            )
+            moe_kwargs = (
+                {"workspace": self._mxfp8_workspace}
+                if kernel_backend_moe == KernelBackendMoE.sonicmoe_mxfp8
+                else {}
+            )
+            hidden_states, router_logits, expert_frequency = moe_fn(
                 hidden_states,
                 self.router.weight,
                 self.c_fc.weight.permute(1, 2, 0),
@@ -227,6 +241,7 @@ class MoE(nn.Module):
                 self.stream_id,
                 self.activation_function,
                 is_inference_mode or not self.training,
+                **moe_kwargs,
             )
         else:
             # hidden_states -> (total_q, hidden_size)

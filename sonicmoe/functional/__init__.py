@@ -21,9 +21,13 @@ from .backward import (
     _up_projection_backward_act,
 )
 from .forward import _router_forward, _topk_softmax_fwd
-from .triton_kernels import TC_topk_router_metadata_triton, general_routing_router_metadata_triton
-
-
+from .mxfp8 import Mxfp8Workspace, mxfp8_experts
+from .triton_kernels import (
+    TC_topk_router_metadata_triton,
+    TC_topk_router_metadata_triton_workspace,
+    general_routing_router_metadata_triton,
+    topk_router_workspace_shape,
+)
 
 # QuACK autotuning accelerators, applied at import. QuACK sweeps its whole config space
 # per problem key, and MoE keys move every step (M = routed tokens), so we shrink the
@@ -555,6 +559,75 @@ def moe_TC_softmax_topk_layer(
     )
 
     return o, router_logits, expert_frequency
+
+
+def moe_TC_softmax_topk_layer_mxfp8(
+    x: torch.Tensor,
+    router_w: torch.Tensor,
+    w1: torch.Tensor,
+    b1: torch.Tensor | None,
+    w2: torch.Tensor,
+    b2: torch.Tensor | None,
+    K: int,
+    stream_id: int,
+    activation_type: ActivationType | str = ActivationType.SWIGLU,
+    is_inference_mode_enabled: bool = False,
+    is_softmax_over_topk: bool = True,
+    norm_topk_probs: bool = False,
+    workspace: Mxfp8Workspace | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """SM100 MXFP8 counterpart of :func:`moe_TC_softmax_topk_layer`."""
+    del stream_id
+    if isinstance(activation_type, str):
+        activation_type = ActivationType(activation_type)
+    workspace = Mxfp8Workspace() if workspace is None else workspace
+    E = router_w.size(0)
+    router_logits = F.linear(x, router_w)
+    topk_scores, topk_indices = TC_Softmax_Topk_Router_Function.apply(
+        router_logits, E, K, is_softmax_over_topk, norm_topk_probs
+    )
+    T = x.size(0)
+    TK = T * K
+    device = x.device
+    s_scatter_idx = torch.empty(TK, dtype=torch.int32, device=device)
+    s_reverse_scatter_idx = torch.empty(TK, dtype=torch.int32, device=device)
+    expert_frequency = torch.empty(E, dtype=torch.int32, device=device)
+    expert_offsets = torch.empty(E + 1, dtype=torch.int32, device=device)
+    x_gather_idx = torch.empty(TK, dtype=torch.int32, device=device)
+    router_scratch = workspace.tensor(
+        "router.histogram",
+        topk_router_workspace_shape(T, E, K),
+        torch.int32,
+        device,
+    )
+    TC_topk_router_metadata_triton_workspace(
+        topk_indices,
+        E,
+        expert_frequency,
+        expert_offsets,
+        x_gather_idx,
+        s_scatter_idx,
+        s_reverse_scatter_idx,
+        router_scratch,
+    )
+    output = mxfp8_experts(
+        x,
+        w1,
+        b1,
+        w2,
+        b2,
+        topk_scores,
+        expert_offsets,
+        x_gather_idx,
+        s_scatter_idx,
+        s_reverse_scatter_idx,
+        workspace,
+        T,
+        K,
+        activation_type,
+        is_inference_mode_enabled,
+    )
+    return output, router_logits, expert_frequency
 
 
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
