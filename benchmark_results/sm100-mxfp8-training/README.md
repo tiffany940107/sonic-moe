@@ -1,7 +1,8 @@
 # SM100 MXFP8 single-GPU results
 
-Results were collected on 2026-09-07. They are point measurements, not a
-claim that one backend wins for every MoE shape.
+Initial results were collected on 2026-09-07. The optimized training results
+were collected on 2026-09-08. They are point measurements, not a claim that
+one backend wins for every MoE shape.
 
 ## Environment
 
@@ -12,11 +13,66 @@ claim that one backend wins for every MoE shape.
 | CUDA runtime | 13.4 (forward compatibility enabled) |
 | PyTorch | `2.14.0a0+4fdf77b940.nv26.08` |
 | CUTLASS DSL | 4.7.1 |
-| Quack | `04a18b5c74d9f6fec599825855e53879e22855b9` |
+| Quack | `19e5278` |
 | Precision | BF16 masters; E4M3 values + E8M0 scales for MXFP8 GEMMs |
 
-All runs use 5 warmup iterations, 20 measured iterations, 8 experts, top-k 2,
-SwiGLU, and the default `SONICMOE_MXFP8_AUTOTUNE=0`.
+## Optimized training acceptance result (2026-09-08)
+
+The accepted eager training step includes forward, backward, switch auxiliary
+loss, and the optimizer update. BF16 uses `torch.optim.SGD`; MXFP8 uses
+`Mxfp8SGD`, which updates BF16 master weights and refreshes the forward MXFP8
+cache in fused kernels. The benchmark alternates BF16 and MXFP8 steps, uses 30
+warmup iterations and 200 measured iterations, and was repeated in three fresh
+processes.
+
+Shape: `T=1024, E=8, top-k=2, H=2048, I=2048` on NVIDIA B200.
+
+| Fresh process | BF16 p50 | MXFP8 `auto` p50 | Speedup |
+|---|---:|---:|---:|
+| 1 | 2.646240 ms | 1.941440 ms | 1.36303x |
+| 2 | 2.641504 ms | 1.944544 ms | 1.35842x |
+| 3 | 2.635392 ms | 1.932160 ms | 1.36396x |
+
+The minimum speedup is `1.35842x`; the mean of the three speedup ratios is
+`1.36180x`. All three fresh processes exceed the `1.30x` target.
+
+This result is specifically for policy `auto`: expert forward uses MXFP8,
+while dgrad/wgrad use the measured faster precision for this SM100 shape. It
+must not be reported as a full-MXFP8 result. With policy `mxfp8`, all six
+expert forward/backward GEMMs use MXFP8; its current speedups are `1.28599x`
+without an optimizer and `1.19915x` for the optimizer-inclusive step.
+
+Reproduce an acceptance run from the workspace root with:
+
+```bash
+SM100_GPUS=0 scripts/run_sm100_container.sh env \
+  PYTHONPATH=/workspace/worktrees/quack-sm100-training:/workspace/worktrees/sonic-moe-sm100-training \
+  python /workspace/worktrees/sonic-moe-sm100-training/benchmarks/benchmark_sm100_mxfp8.py \
+  --mode training --tokens 1024 --experts 8 --top-k 2 \
+  --hidden 2048 --intermediate 2048 --optimizer-step \
+  --mxfp8-policy auto \
+  --backends sonicmoe sonicmoe_mxfp8_fused_sgd \
+  --interleave --warmup 30 --repeats 200
+```
+
+The optimized path fuses router projection/top-k, switch-loss backward, route
+metadata plus grouped scores, Quack dpreact quantization, and paired expert
+weight update/quantization. The final `auto` profile has 25 CUDA launches per
+step and about 354 us of active GPU kernel time per step.
+
+Regression coverage after these changes:
+
+- Sonic MXFP8 quantization/training/router tests: 41 passed.
+- Sonic existing metadata/MoE tests: 101 passed.
+- Quack blockscaled/GEMM interface tests: 141 passed.
+- Total: 283 passed.
+
+## Initial baseline (2026-09-07, historical)
+
+The following measurements predate the optimized router, metadata, backward,
+and optimizer paths. They use 5 warmup iterations, 20 measured iterations, 8
+experts, top-k 2, SwiGLU, and the default
+`SONICMOE_MXFP8_AUTOTUNE=0`.
 
 ## End-to-end latency
 
@@ -33,8 +89,9 @@ Speedup is BF16 p50 divided by MXFP8 p50.
 | train + SGD `(1024,2048,2048)` | MXFP8 | 3.1060 | 3.1734 | 3.1751 | 1063.9 | 0.823x |
 
 The larger inference case crosses the compute-amortization point in this
-matrix. The middle-sized case is launch/dispatch bound, while training still
-pays for multiple role-specific activation and gradient casts. The large
+matrix. At this historical point, the middle-sized case was launch/dispatch
+bound, while training still paid for multiple role-specific activation and
+gradient casts. The large
 MXFP8 p99 contains one measured outlier; p50 and p95 are more representative
 of steady state in this 20-sample run.
 

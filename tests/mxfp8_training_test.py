@@ -5,9 +5,15 @@ import copy
 
 import pytest
 import torch
-from sonicmoe import KernelBackendMoE, MoE
+
+from sonicmoe import (
+    KernelBackendMoE,
+    MoE,
+    Mxfp8SGD,
+    moe_TC_softmax_topk_layer_mxfp8,
+)
 from sonicmoe.enums import ActivationType
-from sonicmoe.functional.mxfp8 import Mxfp8Workspace
+from sonicmoe.functional.mxfp8 import Mxfp8TrainingPolicy, Mxfp8Workspace
 
 
 def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
@@ -17,7 +23,19 @@ def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
 
 
 @pytest.mark.parametrize("add_bias", [False, True])
-def test_sm100_mxfp8_moe_forward_backward(add_bias):
+@pytest.mark.parametrize(
+    "training_policy",
+    [
+        Mxfp8TrainingPolicy(),
+        Mxfp8TrainingPolicy(
+            fc1_dgrad="bf16",
+            fc2_dgrad="bf16",
+            fc1_wgrad="bf16",
+            fc2_wgrad="bf16",
+        ),
+    ],
+)
+def test_sm100_mxfp8_moe_forward_backward(add_bias, training_policy):
     if torch.cuda.get_device_properties(0).major != 10:
         pytest.skip("the single-GPU MXFP8 training backend targets SM100")
     torch.manual_seed(42)
@@ -38,6 +56,7 @@ def test_sm100_mxfp8_moe_forward_backward(add_bias):
         torch.nn.init.normal_(model_ref.c_fc.bias, std=0.01)
         torch.nn.init.normal_(model_ref.c_proj.bias, std=0.01)
     model_mx = copy.deepcopy(model_ref)
+    model_mx._mxfp8_workspace = Mxfp8Workspace(training_policy=training_policy)
 
     x_ref = (
         torch.randn(256, 256, device="cuda", dtype=torch.bfloat16) * 0.02
@@ -128,6 +147,129 @@ def test_sm100_mxfp8_optimizer_steps():
         )
         optimizer.step()
     assert not torch.equal(model.c_fc.weight, initial)
+
+
+@pytest.mark.parametrize(
+    "training_policy",
+    [
+        Mxfp8TrainingPolicy(),
+        Mxfp8TrainingPolicy(
+            fc1_dgrad="bf16",
+            fc2_dgrad="bf16",
+            fc1_wgrad="bf16",
+            fc2_wgrad="bf16",
+        ),
+    ],
+)
+def test_sm100_mxfp8_fused_sgd_matches_standard_sgd(training_policy):
+    if torch.cuda.get_device_properties(0).major != 10:
+        pytest.skip("the single-GPU MXFP8 training backend targets SM100")
+    torch.manual_seed(13)
+    standard = (
+        MoE(
+            num_experts=4,
+            num_experts_per_tok=2,
+            hidden_size=128,
+            intermediate_size=128,
+            activation_function=ActivationType.SWIGLU,
+            add_bias=True,
+            std=0.02,
+        )
+        .cuda()
+        .to(torch.bfloat16)
+    )
+    fused = copy.deepcopy(standard)
+    standard._mxfp8_workspace = Mxfp8Workspace(training_policy=training_policy)
+    fused._mxfp8_workspace = Mxfp8Workspace(training_policy=training_policy)
+    standard_optimizer = torch.optim.SGD(standard.parameters(), lr=0.0125)
+    fused_optimizer = Mxfp8SGD(fused, lr=0.0125)
+
+    for _ in range(3):
+        standard_optimizer.zero_grad(set_to_none=True)
+        fused_optimizer.zero_grad(set_to_none=True)
+        x = torch.randn(64, 128, device="cuda", dtype=torch.bfloat16)
+        expected, expected_aux = standard(
+            x, kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8
+        )
+        actual, actual_aux = fused(
+            x, kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8
+        )
+        assert torch.equal(actual, expected)
+        expected_loss = expected.float().square().mean() + 0.01 * expected_aux
+        actual_loss = actual.float().square().mean() + 0.01 * actual_aux
+        expected_loss.backward()
+        actual_loss.backward()
+        standard_optimizer.step()
+        fused_optimizer.step()
+        for actual_parameter, expected_parameter in zip(
+            fused.parameters(), standard.parameters()
+        ):
+            assert torch.equal(actual_parameter, expected_parameter)
+
+
+@pytest.mark.parametrize(
+    "training_policy",
+    [
+        Mxfp8TrainingPolicy(),
+        Mxfp8TrainingPolicy(fc1_wgrad="bf16", fc2_wgrad="bf16"),
+        Mxfp8TrainingPolicy(
+            fc1_dgrad="bf16",
+            fc2_dgrad="bf16",
+            fc1_wgrad="bf16",
+            fc2_wgrad="bf16",
+        ),
+    ],
+)
+def test_sm100_mxfp8_weight_gradients_preserve_master_layout(training_policy):
+    """Expert wgrads must reach their leaves in final layouts without copies."""
+    if torch.cuda.get_device_properties(0).major != 10:
+        pytest.skip("the single-GPU MXFP8 training backend targets SM100")
+    torch.manual_seed(17)
+    model_ref = (
+        MoE(
+            num_experts=4,
+            num_experts_per_tok=2,
+            hidden_size=128,
+            intermediate_size=128,
+            activation_function=ActivationType.SWIGLU,
+            add_bias=False,
+            std=0.02,
+        )
+        .cuda()
+        .to(torch.bfloat16)
+    )
+    model_mx = copy.deepcopy(model_ref)
+    x_ref = torch.randn(64, 128, device="cuda", dtype=torch.bfloat16)
+    x_mx = x_ref.detach().clone()
+    grad_out = torch.randn_like(x_ref)
+
+    with torch.autocast("cuda", torch.float32):
+        y_ref = model_ref(x_ref, kernel_backend_moe=KernelBackendMoE.torch)[0]
+        w1_view = model_mx.c_fc.weight.permute(1, 2, 0)
+        w2_view = model_mx.c_proj.weight.permute(1, 2, 0)
+        y_mx = moe_TC_softmax_topk_layer_mxfp8(
+            x_mx,
+            model_mx.router.weight,
+            w1_view,
+            None,
+            w2_view,
+            None,
+            model_mx.top_k,
+            model_mx.stream_id,
+            model_mx.activation_function,
+            workspace=Mxfp8Workspace(training_policy=training_policy),
+        )[0]
+
+    expected_w1, expected_w2 = torch.autograd.grad(
+        y_ref, (model_ref.c_fc.weight, model_ref.c_proj.weight), grad_out
+    )
+    actual_w1, actual_w2 = torch.autograd.grad(y_mx, (w1_view, w2_view), grad_out)
+    assert _relative_l2(actual_w1.permute(2, 0, 1), expected_w1) < 0.15
+    assert _relative_l2(actual_w2.permute(2, 0, 1), expected_w2) < 0.15
+    assert actual_w1.stride() == w1_view.stride()
+    assert actual_w2.stride() == w2_view.stride()
+    assert actual_w1.permute(2, 0, 1).is_contiguous()
+    assert actual_w2.permute(2, 0, 1).is_contiguous()
 
 
 @pytest.mark.parametrize(

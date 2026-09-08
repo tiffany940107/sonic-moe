@@ -7,7 +7,12 @@ import torch
 import triton
 import triton.language as tl
 
-from .bitmatrix import _bitmatrix_metadata_compute_stage1, _bitmatrix_metadata_compute_stage2, _keyed_add
+from .bitmatrix import (
+    _bitmatrix_metadata_compute_stage1,
+    _bitmatrix_metadata_compute_stage2,
+    _bitmatrix_metadata_single_stage,
+    _keyed_add,
+)
 
 
 @triton.jit
@@ -69,6 +74,189 @@ def topk_router_workspace_shape(T: int, E: int, K: int) -> tuple[int, int]:
     """Shape of the reusable tiled-histogram buffer for exact top-k routing."""
     tokens_per_block = 1024 // triton.next_power_of_2(K)
     return E, triton.cdiv(T, tokens_per_block)
+
+
+@torch.library.custom_op(
+    "triton_kernels::_topk_router_metadata_single_stage",
+    mutates_args={
+        "expert_frequency",
+        "expert_frequency_offset",
+        "x_gather_idx",
+        "s_scatter_idx",
+        "s_reverse_scatter_idx",
+    },
+)
+def _topk_router_metadata_single_stage(
+    topk_router_indices: torch.Tensor,
+    expert_frequency: torch.Tensor,
+    expert_frequency_offset: torch.Tensor,
+    x_gather_idx: torch.Tensor,
+    s_scatter_idx: torch.Tensor,
+    s_reverse_scatter_idx: torch.Tensor,
+    E: int,
+) -> None:
+    T, K = topk_router_indices.shape
+    TK = T * K
+    block_tk = triton.next_power_of_2(TK)
+    block_e = triton.next_power_of_2(E)
+    _bitmatrix_metadata_single_stage[(1,)](
+        topk_router_indices,
+        topk_router_indices,
+        topk_router_indices,
+        topk_router_indices,
+        topk_router_indices,
+        expert_frequency,
+        expert_frequency_offset,
+        x_gather_idx,
+        s_scatter_idx,
+        s_reverse_scatter_idx,
+        TK=TK,
+        T=T,
+        K=K,
+        E=E,
+        BLOCK_TK=block_tk,
+        BLOCK_T=triton.next_power_of_2(T),
+        BLOCK_E=block_e,
+        LOGITS_STRIDE_T=0,
+        LOGITS_STRIDE_E=0,
+        HAS_GROUPED_SCORES=False,
+        HAS_SWITCH_AUX=False,
+        num_warps=8,
+    )
+
+
+@torch.library.custom_op(
+    "triton_kernels::_topk_router_metadata_switch_aux_single_stage",
+    mutates_args={
+        "grouped_router_scores",
+        "expert_frequency",
+        "expert_frequency_offset",
+        "x_gather_idx",
+        "s_scatter_idx",
+        "s_reverse_scatter_idx",
+    },
+)
+def _topk_router_metadata_switch_aux_single_stage(
+    topk_router_indices: torch.Tensor,
+    topk_router_scores: torch.Tensor,
+    grouped_router_scores: torch.Tensor,
+    router_logits: torch.Tensor,
+    expert_frequency: torch.Tensor,
+    expert_frequency_offset: torch.Tensor,
+    x_gather_idx: torch.Tensor,
+    s_scatter_idx: torch.Tensor,
+    s_reverse_scatter_idx: torch.Tensor,
+    E: int,
+) -> torch.Tensor:
+    T, K = topk_router_indices.shape
+    TK = T * K
+    loss = torch.empty((), dtype=torch.float32, device=router_logits.device)
+    _bitmatrix_metadata_single_stage[(1,)](
+        topk_router_indices,
+        topk_router_scores,
+        grouped_router_scores,
+        router_logits,
+        loss,
+        expert_frequency,
+        expert_frequency_offset,
+        x_gather_idx,
+        s_scatter_idx,
+        s_reverse_scatter_idx,
+        TK=TK,
+        T=T,
+        K=K,
+        E=E,
+        BLOCK_TK=triton.next_power_of_2(TK),
+        BLOCK_T=triton.next_power_of_2(T),
+        BLOCK_E=triton.next_power_of_2(E),
+        LOGITS_STRIDE_T=router_logits.stride(0),
+        LOGITS_STRIDE_E=router_logits.stride(1),
+        HAS_GROUPED_SCORES=True,
+        HAS_SWITCH_AUX=True,
+        num_warps=8,
+    )
+    return loss
+
+
+def TC_topk_router_metadata_triton_fused(
+    topk_router_indices: torch.Tensor,
+    E: int,
+    expert_frequency: torch.Tensor,
+    expert_frequency_offset: torch.Tensor,
+    x_gather_idx: torch.Tensor,
+    s_scatter_idx: torch.Tensor,
+    s_reverse_scatter_idx: torch.Tensor,
+    fallback_workspace: torch.Tensor,
+) -> None:
+    """One-launch stable route metadata for modest ``T * K * E`` tiles."""
+    tokens, top_k = topk_router_indices.shape
+    block_tk = triton.next_power_of_2(tokens * top_k)
+    block_e = triton.next_power_of_2(E)
+    if block_tk <= 4096 and block_tk * block_e <= 32768:
+        _topk_router_metadata_single_stage(
+            topk_router_indices,
+            expert_frequency,
+            expert_frequency_offset,
+            x_gather_idx,
+            s_scatter_idx,
+            s_reverse_scatter_idx,
+            E,
+        )
+    else:
+        TC_topk_router_metadata_triton_workspace(
+            topk_router_indices,
+            E,
+            expert_frequency,
+            expert_frequency_offset,
+            x_gather_idx,
+            s_scatter_idx,
+            s_reverse_scatter_idx,
+            fallback_workspace,
+        )
+
+
+def TC_topk_router_metadata_switch_aux_triton_fused(
+    topk_router_indices: torch.Tensor,
+    topk_router_scores: torch.Tensor,
+    grouped_router_scores: torch.Tensor,
+    router_logits: torch.Tensor,
+    E: int,
+    expert_frequency: torch.Tensor,
+    expert_frequency_offset: torch.Tensor,
+    x_gather_idx: torch.Tensor,
+    s_scatter_idx: torch.Tensor,
+    s_reverse_scatter_idx: torch.Tensor,
+    fallback_workspace: torch.Tensor,
+) -> torch.Tensor | None:
+    """Fuse small-route metadata and switch-loss forward into one launch."""
+    tokens, top_k = topk_router_indices.shape
+    block_tk = triton.next_power_of_2(tokens * top_k)
+    block_t = triton.next_power_of_2(tokens)
+    block_e = triton.next_power_of_2(E)
+    if block_tk <= 4096 and block_tk * block_e <= 32768 and block_t * block_e <= 16384:
+        return _topk_router_metadata_switch_aux_single_stage(
+            topk_router_indices,
+            topk_router_scores,
+            grouped_router_scores,
+            router_logits,
+            expert_frequency,
+            expert_frequency_offset,
+            x_gather_idx,
+            s_scatter_idx,
+            s_reverse_scatter_idx,
+            E,
+        )
+    TC_topk_router_metadata_triton_fused(
+        topk_router_indices,
+        E,
+        expert_frequency,
+        expert_frequency_offset,
+        x_gather_idx,
+        s_scatter_idx,
+        s_reverse_scatter_idx,
+        fallback_workspace,
+    )
+    return None
 
 
 def TC_topk_router_metadata_triton_workspace(
@@ -244,7 +432,9 @@ def _general_metadata_compute_stage2(
     within_expert_rank = (inclusive_run_lengths - 1) & 0xFFFF
 
     # Output position = expert_offs[e] + partial_sum[tile, e] + within_expert_rank.
-    s_reverse_scatter_val = tl.load(partial_sum_ptr + pid_m + expert * n_tiles, mask=mask)
+    s_reverse_scatter_val = tl.load(
+        partial_sum_ptr + pid_m + expert * n_tiles, mask=mask
+    )
     s_reverse_scatter_val += tl.load(expert_offs_ptr + expert, mask=mask)
     s_reverse_scatter_val += within_expert_rank
 

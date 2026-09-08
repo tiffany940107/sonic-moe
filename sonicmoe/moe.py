@@ -2,6 +2,7 @@
 # Copyright (c) 2025, Wentao Guo, Mayank Mishra, Xinle Cheng, Ion Stoica, Tri Dao
 # ********************************************************************************
 
+import os
 from typing import Callable
 
 import torch
@@ -11,6 +12,9 @@ import torch.nn.functional as F
 from .enums import ActivationType, KernelBackendMoE, is_glu
 from .functional import moe_TC_softmax_topk_layer, moe_TC_softmax_topk_layer_mxfp8
 from .functional.mxfp8 import Mxfp8Workspace
+from .functional.router_aux import mxfp8_switch_aux_loss
+
+_MXFP8_FUSED_SWITCH_LOSS = os.environ.get("SONICMOE_MXFP8_FUSE_SWITCH_LOSS", "1") == "1"
 
 try:
     from xma.modules.moe import scattered_experts
@@ -56,7 +60,12 @@ def _silu(x: torch.Tensor) -> torch.Tensor:
 
 class Experts(nn.Module):
     def __init__(
-        self, num_experts: int, in_features: int, out_features: int, add_bias: bool = True, std: float | None = None
+        self,
+        num_experts: int,
+        in_features: int,
+        out_features: int,
+        add_bias: bool = True,
+        std: float | None = None,
     ) -> None:
         super().__init__()
 
@@ -134,7 +143,10 @@ class Experts(nn.Module):
         return input
 
     def torch_forward(
-        self, input: torch.Tensor, expert_frequency: torch.Tensor | None, return_list: bool = False
+        self,
+        input: torch.Tensor,
+        expert_frequency: torch.Tensor | None,
+        return_list: bool = False,
     ) -> list[torch.Tensor] | torch.Tensor:
         if isinstance(input, torch.Tensor):
             input = input.split(expert_frequency.tolist(), dim=0)
@@ -142,7 +154,9 @@ class Experts(nn.Module):
             assert expert_frequency is None
 
         input = [
-            F.linear(input[i], self.weight[i], None if self.bias is None else self.bias[i])
+            F.linear(
+                input[i], self.weight[i], None if self.bias is None else self.bias[i]
+            )
             for i in range(self.num_experts)
         ]
 
@@ -182,14 +196,18 @@ class MoE(nn.Module):
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
 
-        self.router = nn.Linear(in_features=self.hidden_size, out_features=num_experts, bias=False)
+        self.router = nn.Linear(
+            in_features=self.hidden_size, out_features=num_experts, bias=False
+        )
 
         self.activation_function = activation_function
 
         self.c_fc = Experts(
             num_experts=num_experts,
             in_features=self.hidden_size,
-            out_features=2 * self.intermediate_size if is_glu(activation_function) else self.intermediate_size,
+            out_features=2 * self.intermediate_size
+            if is_glu(activation_function)
+            else self.intermediate_size,
             add_bias=add_bias,
             std=std,
         )
@@ -215,11 +233,16 @@ class MoE(nn.Module):
 
         # hidden_states -> (batch_size, query_length, hidden_size)
         hidden_states = hidden_states.view(-1, self.hidden_size)
+        fused_aux_loss = None
 
-        if kernel_backend_moe in (
-            KernelBackendMoE.sonicmoe,
-            KernelBackendMoE.sonicmoe_mxfp8,
-        ) and self.num_experts <= 32768:
+        if (
+            kernel_backend_moe
+            in (
+                KernelBackendMoE.sonicmoe,
+                KernelBackendMoE.sonicmoe_mxfp8,
+            )
+            and self.num_experts <= 32768
+        ):
             moe_fn = (
                 moe_TC_softmax_topk_layer_mxfp8
                 if kernel_backend_moe == KernelBackendMoE.sonicmoe_mxfp8
@@ -230,7 +253,14 @@ class MoE(nn.Module):
                 if kernel_backend_moe == KernelBackendMoE.sonicmoe_mxfp8
                 else {}
             )
-            hidden_states, router_logits, expert_frequency = moe_fn(
+            fuse_switch_aux_loss = (
+                kernel_backend_moe == KernelBackendMoE.sonicmoe_mxfp8
+                and _MXFP8_FUSED_SWITCH_LOSS
+                and not is_inference_mode
+            )
+            if fuse_switch_aux_loss:
+                moe_kwargs["fuse_switch_aux_loss"] = True
+            moe_result = moe_fn(
                 hidden_states,
                 self.router.weight,
                 self.c_fc.weight.permute(1, 2, 0),
@@ -243,9 +273,20 @@ class MoE(nn.Module):
                 is_inference_mode or not self.training,
                 **moe_kwargs,
             )
+            if fuse_switch_aux_loss:
+                (
+                    hidden_states,
+                    router_logits,
+                    expert_frequency,
+                    fused_aux_loss,
+                ) = moe_result
+            else:
+                hidden_states, router_logits, expert_frequency = moe_result
         else:
             # hidden_states -> (total_q, hidden_size)
-            router_logits, router_weights, selected_experts = self._compute_routing_weights(hidden_states)
+            router_logits, router_weights, selected_experts = (
+                self._compute_routing_weights(hidden_states)
+            )
 
             # router_logits -> (total_q, num_experts)
             # router_weights -> (total_q, top_k)
@@ -264,6 +305,15 @@ class MoE(nn.Module):
 
         if is_inference_mode:
             aux_loss = None
+        elif (
+            kernel_backend_moe == KernelBackendMoE.sonicmoe_mxfp8
+            and _MXFP8_FUSED_SWITCH_LOSS
+        ):
+            aux_loss = (
+                fused_aux_loss
+                if fused_aux_loss is not None
+                else mxfp8_switch_aux_loss(router_logits, expert_frequency)
+            )
         else:
             aux_loss = self._compute_switch_loss(
                 logits=router_logits,
@@ -286,11 +336,19 @@ class MoE(nn.Module):
 
         expert_frequency = expert_frequency.float()
 
-        aux_loss = num_experts * (F.normalize(acc_probs, p=1, dim=0) * F.normalize(expert_frequency, p=1, dim=0)).sum()
+        aux_loss = (
+            num_experts
+            * (
+                F.normalize(acc_probs, p=1, dim=0)
+                * F.normalize(expert_frequency, p=1, dim=0)
+            ).sum()
+        )
 
         return aux_loss
 
-    def _compute_routing_weights(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor]:
+    def _compute_routing_weights(
+        self, hidden_states: torch.Tensor
+    ) -> tuple[torch.Tensor]:
         # hidden_states -> (total_q, hidden_size)
         router_logits = self.router(hidden_states)
         # router_logits -> (total_q, num_experts)
@@ -317,7 +375,9 @@ class MoE(nn.Module):
         with torch.no_grad():
             sorted_expert_idxs, sorted_scattered_idxs = selected_experts.sort()
 
-        expert_frequency = selected_experts.bincount(minlength=self.num_experts).to(torch.int32)
+        expert_frequency = selected_experts.bincount(minlength=self.num_experts).to(
+            torch.int32
+        )
         expert_offsets = expert_frequency.cumsum(-1).to(torch.int32)
 
         act_func = {
@@ -364,10 +424,14 @@ class MoE(nn.Module):
             )
 
             hidden_states = [act_func(i) for i in hidden_states]
-            hidden_states = self.c_proj.torch_forward(input=hidden_states, expert_frequency=None, return_list=False)
+            hidden_states = self.c_proj.torch_forward(
+                input=hidden_states, expert_frequency=None, return_list=False
+            )
 
             hidden_states = hidden_states * batch_gates.unsqueeze(-1)
-            zeros = torch.zeros((T, self.hidden_size), dtype=torch.float32, device=hidden_states.device)
+            zeros = torch.zeros(
+                (T, self.hidden_size), dtype=torch.float32, device=hidden_states.device
+            )
             hidden_states = zeros.index_add(0, fan_in_index, hidden_states)
         else:
             raise ValueError(f"unexpected kernel_backend_moe ({kernel_backend_moe})")

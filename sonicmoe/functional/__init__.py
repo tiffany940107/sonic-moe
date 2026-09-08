@@ -3,6 +3,7 @@
 # ********************************************************************************
 
 import itertools
+import os
 from functools import partial
 
 import quack.autotuner
@@ -22,18 +23,37 @@ from .backward import (
 )
 from .forward import _router_forward, _topk_softmax_fwd
 from .mxfp8 import Mxfp8Workspace, mxfp8_experts
+from .router_aux import mxfp8_switch_aux_loss
+from .router_mxfp8 import (
+    mxfp8_router_attach_switch_aux,
+    mxfp8_router_linear_topk,
+    mxfp8_router_linear_topk_raw,
+    mxfp8_router_switch_aux_supported,
+)
 from .triton_kernels import (
+    TC_topk_router_metadata_switch_aux_triton_fused,
     TC_topk_router_metadata_triton,
+    TC_topk_router_metadata_triton_fused,
     TC_topk_router_metadata_triton_workspace,
     general_routing_router_metadata_triton,
     topk_router_workspace_shape,
+)
+
+_MXFP8_FUSE_ROUTER_METADATA = (
+    os.environ.get("SONICMOE_MXFP8_FUSE_ROUTER_METADATA", "1") == "1"
+)
+_MXFP8_FUSE_ROUTER_LINEAR_TOPK = (
+    os.environ.get("SONICMOE_MXFP8_FUSE_ROUTER_LINEAR_TOPK", "1") == "1"
 )
 
 # QuACK autotuning accelerators, applied at import. QuACK sweeps its whole config space
 # per problem key, and MoE keys move every step (M = routed tokens), so we shrink the
 # space and let nearby M share a cache entry. Search only; the math is unchanged.
 
-def _fast_sm90_configs(epilogue: str | None = None, tune_coop: bool = True) -> list[GemmConfig]:
+
+def _fast_sm90_configs(
+    epilogue: str | None = None, tune_coop: bool = True
+) -> list[GemmConfig]:
     """Reduced SM90 (Hopper) config space — drop-in for quack.gemm_config._get_sm90_configs.
 
     Drops tile_n=208 (gated rejects non-multiples of 32; gather_A rejects it on SM90)
@@ -43,8 +63,12 @@ def _fast_sm90_configs(epilogue: str | None = None, tune_coop: bool = True) -> l
     tile_mn_vals_coop = [(256, tile_n) for tile_n in tile_n_vals] + [(128, 256)]
     tile_mn_vals_pingpong = [(128, tile_n) for tile_n in tile_n_vals]
     if epilogue in ["gated"]:
-        tile_mn_vals_coop = [(m, n) for m, n in tile_mn_vals_coop if n % 32 == 0 and m != 192]
-        tile_mn_vals_pingpong = [(m, n) for m, n in tile_mn_vals_pingpong if n % 32 == 0]
+        tile_mn_vals_coop = [
+            (m, n) for m, n in tile_mn_vals_coop if n % 32 == 0 and m != 192
+        ]
+        tile_mn_vals_pingpong = [
+            (m, n) for m, n in tile_mn_vals_pingpong if n % 32 == 0
+        ]
     tile_mn_vals = []
     if tune_coop:
         tile_mn_vals += [(m, n, False) for m, n in tile_mn_vals_coop]
@@ -65,9 +89,10 @@ def _fast_sm90_configs(epilogue: str | None = None, tune_coop: bool = True) -> l
             is_dynamic_persistent=False,  # SM90 has no CLC-based dynamic persistent scheduler
             use_tma_gather=False,  # TMA gather not supported on SM90
         )
-        for (tile_m, tile_n, pingpong), (cluster_m, cluster_n), swap_ab in itertools.product(
-            tile_mn_vals, cluster, swap_ab_vals
-        )
+        for (tile_m, tile_n, pingpong), (
+            cluster_m,
+            cluster_n,
+        ), swap_ab in itertools.product(tile_mn_vals, cluster, swap_ab_vals)
     ]
 
 
@@ -85,7 +110,9 @@ def _fast_sm100_configs(epilogue: str | None = None) -> list[GemmConfig]:
     swap_ab_vals = [False, True]
     if epilogue in ["lse", "gated"]:
         swap_ab_vals = [False]
-    GemmConfigCls = partial(GemmConfig, pingpong=False, device_capacity=10)  # no pingpong on SM100
+    GemmConfigCls = partial(
+        GemmConfig, pingpong=False, device_capacity=10
+    )  # no pingpong on SM100
     use_clc_vals = [True, False]
     use_tma_gather_vals = [True, False]
     return [
@@ -178,12 +205,21 @@ gemm_tuned.configs = [AutotuneConfig(config=c) for c in _gc.get_all_configs()]
 class TC_Softmax_Topk_Router_Function(torch.autograd.Function):
     @staticmethod
     def forward(
-        ctx, router_logits: torch.Tensor, E: int, K: int, is_softmax_over_topk: bool, norm_topk_probs: bool
+        ctx,
+        router_logits: torch.Tensor,
+        E: int,
+        K: int,
+        is_softmax_over_topk: bool,
+        norm_topk_probs: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         T = router_logits.size(0)
 
-        topk_router_score = torch.empty(T, K, dtype=torch.float32, device=router_logits.device)
-        topk_router_indices = torch.empty(T, K, dtype=torch.int32, device=router_logits.device)
+        topk_router_score = torch.empty(
+            T, K, dtype=torch.float32, device=router_logits.device
+        )
+        topk_router_indices = torch.empty(
+            T, K, dtype=torch.int32, device=router_logits.device
+        )
 
         _topk_softmax_fwd(
             router_logits,
@@ -210,7 +246,9 @@ class TC_Softmax_Topk_Router_Function(torch.autograd.Function):
         T, K = dtopk_score.size()
         E = ctx.E
         topk_router_score, topk_router_indices, router_logits = ctx.saved_tensors
-        dlogits = torch.zeros(T, ctx.E, dtype=ctx.dtype, device=topk_router_score.device)
+        dlogits = torch.zeros(
+            T, ctx.E, dtype=ctx.dtype, device=topk_router_score.device
+        )
 
         _topk_softmax_bwd(
             router_logits,
@@ -256,7 +294,9 @@ class _UpProjection(torch.autograd.Function):
 
         a = torch.empty(TK, I, dtype=x.dtype, device=x.device)
         h = (
-            torch.empty(TK, (2 * I if is_glu_activation else I), dtype=x.dtype, device=x.device)
+            torch.empty(
+                TK, (2 * I if is_glu_activation else I), dtype=x.dtype, device=x.device
+            )
             if (not is_inference_mode_enabled)
             else None
         )
@@ -284,7 +324,9 @@ class _UpProjection(torch.autograd.Function):
         ctx.K = K
         ctx.H = H
         ctx.I = I
-        ctx.is_each_token_has_variable_activated_experts = is_each_token_has_variable_activated_experts
+        ctx.is_each_token_has_variable_activated_experts = (
+            is_each_token_has_variable_activated_experts
+        )
         ctx.is_glu_activation = is_glu_activation
         ctx.concat_layout = concat_layout and is_glu_activation
 
@@ -312,7 +354,9 @@ class _UpProjection(torch.autograd.Function):
         K = ctx.K
         H = ctx.H
         is_glu_activation = ctx.is_glu_activation
-        is_each_token_has_variable_activated_experts = ctx.is_each_token_has_variable_activated_experts
+        is_each_token_has_variable_activated_experts = (
+            ctx.is_each_token_has_variable_activated_experts
+        )
         concat_layout = ctx.concat_layout
 
         (
@@ -390,7 +434,9 @@ class _DownProjection(torch.autograd.Function):
 
         y = torch.empty(TK, H, dtype=a.dtype, device=a.device)
 
-        gemm(a, w2.permute(2, 1, 0), out=y, cu_seqlens_m=expert_frequency_offset, bias=b2)
+        gemm(
+            a, w2.permute(2, 1, 0), out=y, cu_seqlens_m=expert_frequency_offset, bias=b2
+        )
 
         o = torch.empty(T, H, device=a.device, dtype=a.dtype)
         topk_scores = topk_scores.view(-1)
@@ -498,9 +544,9 @@ def moe_TC_softmax_topk_layer(
     norm_topk_probs: bool = False,
     concat_layout: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    assert ((b1 is None) and (b2 is None)) or (
-        (b1 is not None) and (b2 is not None)
-    ), "b1 and b2 has to be None or not None at the same time!"
+    assert ((b1 is None) and (b2 is None)) or ((b1 is not None) and (b2 is not None)), (
+        "b1 and b2 has to be None or not None at the same time!"
+    )
     E = router_w.size(0)
     router_logits = F.linear(x, router_w)
     topk_scores, topk_indices = TC_Softmax_Topk_Router_Function.apply(
@@ -518,7 +564,13 @@ def moe_TC_softmax_topk_layer(
     x_gather_idx = torch.empty(TK, dtype=torch.int32, device=device)
 
     TC_topk_router_metadata_triton(
-        topk_indices, E, expert_frequency, expert_frequency_offset, x_gather_idx, s_scatter_idx, s_reverse_scatter_idx
+        topk_indices,
+        E,
+        expert_frequency,
+        expert_frequency_offset,
+        x_gather_idx,
+        s_scatter_idx,
+        s_reverse_scatter_idx,
     )
 
     if type(activation_type) == str:
@@ -575,20 +627,41 @@ def moe_TC_softmax_topk_layer_mxfp8(
     is_softmax_over_topk: bool = True,
     norm_topk_probs: bool = False,
     workspace: Mxfp8Workspace | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    fuse_switch_aux_loss: bool = False,
+) -> (
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+):
     """SM100 MXFP8 counterpart of :func:`moe_TC_softmax_topk_layer`."""
     del stream_id
     if isinstance(activation_type, str):
         activation_type = ActivationType(activation_type)
     workspace = Mxfp8Workspace() if workspace is None else workspace
+    device = x.device
+    stream_key = workspace._stream_key(device)
+
     E = router_w.size(0)
-    router_logits = F.linear(x, router_w)
-    topk_scores, topk_indices = TC_Softmax_Topk_Router_Function.apply(
-        router_logits, E, K, is_softmax_over_topk, norm_topk_probs
-    )
+    attach_router_aux = False
+    router_aux_loss = None
+    grouped_topk_scores = None
+    scores_are_grouped = False
+    if _MXFP8_FUSE_ROUTER_LINEAR_TOPK and is_softmax_over_topk and not norm_topk_probs:
+        if fuse_switch_aux_loss and mxfp8_router_switch_aux_supported(x, router_w, K):
+            router_logits, topk_scores, topk_indices = mxfp8_router_linear_topk_raw(
+                x, router_w, K
+            )
+            attach_router_aux = True
+        else:
+            router_logits, topk_scores, topk_indices = mxfp8_router_linear_topk(
+                x, router_w, K
+            )
+    else:
+        router_logits = F.linear(x, router_w)
+        topk_scores, topk_indices = TC_Softmax_Topk_Router_Function.apply(
+            router_logits, E, K, is_softmax_over_topk, norm_topk_probs
+        )
     T = x.size(0)
     TK = T * K
-    device = x.device
     s_scatter_idx = torch.empty(TK, dtype=torch.int32, device=device)
     s_reverse_scatter_idx = torch.empty(TK, dtype=torch.int32, device=device)
     expert_frequency = torch.empty(E, dtype=torch.int32, device=device)
@@ -599,17 +672,65 @@ def moe_TC_softmax_topk_layer_mxfp8(
         topk_router_workspace_shape(T, E, K),
         torch.int32,
         device,
+        stream_key=stream_key,
     )
-    TC_topk_router_metadata_triton_workspace(
-        topk_indices,
-        E,
-        expert_frequency,
-        expert_offsets,
-        x_gather_idx,
-        s_scatter_idx,
-        s_reverse_scatter_idx,
-        router_scratch,
-    )
+    if _MXFP8_FUSE_ROUTER_METADATA:
+        if attach_router_aux:
+            grouped_topk_scores = workspace.tensor(
+                "router.grouped_scores",
+                tuple(topk_scores.shape),
+                topk_scores.dtype,
+                device,
+                stream_key=stream_key,
+            )
+            router_aux_loss = TC_topk_router_metadata_switch_aux_triton_fused(
+                topk_indices,
+                topk_scores,
+                grouped_topk_scores,
+                router_logits,
+                E,
+                expert_frequency,
+                expert_offsets,
+                x_gather_idx,
+                s_scatter_idx,
+                s_reverse_scatter_idx,
+                router_scratch,
+            )
+        else:
+            TC_topk_router_metadata_triton_fused(
+                topk_indices,
+                E,
+                expert_frequency,
+                expert_offsets,
+                x_gather_idx,
+                s_scatter_idx,
+                s_reverse_scatter_idx,
+                router_scratch,
+            )
+    else:
+        TC_topk_router_metadata_triton_workspace(
+            topk_indices,
+            E,
+            expert_frequency,
+            expert_offsets,
+            x_gather_idx,
+            s_scatter_idx,
+            s_reverse_scatter_idx,
+            router_scratch,
+        )
+    if attach_router_aux:
+        scores_are_grouped = router_aux_loss is not None
+        router_logits, topk_scores, router_aux_loss = mxfp8_router_attach_switch_aux(
+            x,
+            router_w,
+            router_logits,
+            topk_scores,
+            topk_indices,
+            expert_frequency,
+            router_aux_loss,
+            grouped_topk_scores if scores_are_grouped else None,
+            s_reverse_scatter_idx,
+        )
     output = mxfp8_experts(
         x,
         w1,
@@ -622,11 +743,17 @@ def moe_TC_softmax_topk_layer_mxfp8(
         s_scatter_idx,
         s_reverse_scatter_idx,
         workspace,
+        stream_key,
         T,
         K,
         activation_type,
         is_inference_mode_enabled,
+        scores_are_grouped,
     )
+    if fuse_switch_aux_loss:
+        if router_aux_loss is None:
+            router_aux_loss = mxfp8_switch_aux_loss(router_logits, expert_frequency)
+        return output, router_logits, expert_frequency, router_aux_loss
     return output, router_logits, expert_frequency
 
 
@@ -656,9 +783,9 @@ def moe_general_routing_inputs(
     is_inference_mode_enabled: bool = False,
     concat_layout: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    assert ((b1 is None) and (b2 is None)) or (
-        (b1 is not None) and (b2 is not None)
-    ), "b1 and b2 has to be None or not None at the same time!"
+    assert ((b1 is None) and (b2 is None)) or ((b1 is not None) and (b2 is not None)), (
+        "b1 and b2 has to be None or not None at the same time!"
+    )
 
     T = x.size(0)
     TK = router_scores.size(0)
@@ -673,7 +800,9 @@ def moe_general_routing_inputs(
     expert_frequency = torch.empty(E, dtype=torch.int32, device=device)
     expert_frequency_offset = torch.empty(E + 1, dtype=torch.int32, device=device)
     x_gather_idx = torch.empty(TK, dtype=torch.int32, device=device)
-    num_activated_expert_per_token_offset = torch.empty(T + 1, dtype=torch.int32, device=device)
+    num_activated_expert_per_token_offset = torch.empty(
+        T + 1, dtype=torch.int32, device=device
+    )
 
     general_routing_router_metadata_triton(
         token_indices,

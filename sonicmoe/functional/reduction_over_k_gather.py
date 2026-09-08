@@ -2,8 +2,6 @@
 # Copyright (c) 2025, Wentao Guo, Mayank Mishra, Xinle Cheng, Ion Stoica, Tri Dao
 # ********************************************************************************
 
-from typing import Optional
-
 import torch
 import triton
 import triton.language as tl
@@ -18,7 +16,11 @@ def _get_triton_autotune_configs() -> list[triton.Config]:
             for num_warps in [4, 8]:
                 if BLOCK_K * BLOCK_H <= 32768:
                     configs.append(
-                        triton.Config({"BLOCK_H": BLOCK_H, "BLOCK_K": BLOCK_K}, num_warps=num_warps, num_stages=4)
+                        triton.Config(
+                            {"BLOCK_H": BLOCK_H, "BLOCK_K": BLOCK_K},
+                            num_warps=num_warps,
+                            num_stages=4,
+                        )
                     )
     return configs
 
@@ -45,7 +47,7 @@ def _prune_triton_autotune_config(configs, nargs, **kw):
 
 @triton.autotune(
     configs=_get_triton_autotune_configs(),
-    key=["H", "MAX_K", "w_is_None", "is_varlen_K"],
+    key=["H", "MAX_K", "w_is_None", "w_is_grouped", "is_varlen_K"],
     prune_configs_by={"early_config_prune": _prune_triton_autotune_config},
 )
 @triton.jit
@@ -67,6 +69,7 @@ def token_gather_sum_kernel(
     BLOCK_H: tl.constexpr,
     BLOCK_K: tl.constexpr,
     w_is_None: tl.constexpr,
+    w_is_grouped: tl.constexpr,
     is_varlen_K: tl.constexpr,
 ):
     # 1D tiling over T only
@@ -103,7 +106,9 @@ def token_gather_sum_kernel(
             m_abs = Ms + k_idx  # [BLOCK_K]
 
             # Gather permuted indices
-            perm_idx = tl.load(M_perm_ptr + m_abs, mask=m_k, other=0).to(tl.int64)  # [BLOCK_K]
+            perm_idx = tl.load(M_perm_ptr + m_abs, mask=m_k, other=0).to(
+                tl.int64
+            )  # [BLOCK_K]
 
             # Load x values: [BLOCK_K, BLOCK_H]
             x_ptrs = x_ptr + perm_idx[:, None] * stride_xM + h_idx[None, :] * stride_xH
@@ -114,7 +119,10 @@ def token_gather_sum_kernel(
             if w_is_None:
                 acc += tl.sum(x_vals, axis=0)  # [BLOCK_H]
             else:
-                w_vals = tl.load(w_ptr + m_abs, mask=m_k, other=0.0).to(tl.float32)  # [BLOCK_K]
+                w_offsets = perm_idx if w_is_grouped else m_abs
+                w_vals = tl.load(w_ptr + w_offsets, mask=m_k, other=0.0).to(
+                    tl.float32
+                )  # [BLOCK_K]
                 acc += tl.sum(x_vals * w_vals[:, None], axis=0)  # [BLOCK_H]
 
         # Store final result for this H tile (only once!)
@@ -124,7 +132,7 @@ def token_gather_sum_kernel(
 
 def token_gather_and_sum_varlen_K_triton(
     x: torch.Tensor,  # (Mtotal, H)
-    w: Optional[torch.Tensor],  # (Mtotal,)
+    w: torch.Tensor | None,  # (Mtotal,)
     out: torch.Tensor,  # (T, H)
     M_perm: torch.Tensor,  # (Mtotal,) int32
     M_offset: torch.Tensor,  # (T+1,)   int32, variable K per token
@@ -132,6 +140,7 @@ def token_gather_and_sum_varlen_K_triton(
     MAX_K: int,  # maximum K across all tokens
     H: int,
     is_varlen_K: bool,
+    w_is_grouped: bool = False,
 ):
     """
     1D parallelization over T, with iterative accumulation over K tiles and H tiles.
@@ -157,5 +166,6 @@ def token_gather_and_sum_varlen_K_triton(
         stride_outT=out.stride(0),
         stride_outH=out.stride(1),
         w_is_None=(w is None),
+        w_is_grouped=w_is_grouped,
         is_varlen_K=is_varlen_K,
     )
