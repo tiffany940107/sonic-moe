@@ -292,7 +292,11 @@ def main() -> None:
             "fc2_dgrad_bf16",
             "forward_only",
         ),
-        help="override the MXFP8 training role-precision policy for this run",
+        help=(
+            "override the MXFP8 training role-precision policy for this run; "
+            "the default auto policy uses MXFP8 forward with BF16 dgrad/wgrad, "
+            "while mxfp8 uses MXFP8 for all expert GEMMs"
+        ),
     )
     parser.add_argument(
         "--backends",

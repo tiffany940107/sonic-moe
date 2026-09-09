@@ -71,22 +71,42 @@ output, aux_loss = moe(x, kernel_backend_moe=KernelBackendMoE.sonicmoe)
 
 ### SM100 MXFP8 training
 
-The `feature/sm100-mxfp8-training` branch adds a complete SM100 MXFP8
-forward/backward path while retaining BF16 master parameters:
+The `feature/sm100-mxfp8-training` branch adds an SM100 backend with MXFP8
+expert forward GEMMs and independently selectable backward GEMM precision
+while retaining BF16 master parameters. The default `auto` policy uses BF16
+expert backward GEMMs. Select the policy before constructing the `MoE` module:
+
+```bash
+# Default and recommended for the validated single-GPU shape.
+export SONICMOE_MXFP8_POLICY=auto
+```
 
 ```python
+from sonicmoe import KernelBackendMoE, Mxfp8SGD
+
+# Optional performance path for plain SGD. It updates BF16 master weights and
+# refreshes the MXFP8 weight cache in fused kernels.
+optimizer = Mxfp8SGD(moe, lr=1e-3)
+
 output, aux_loss = moe(
     x,
     kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8,
 )
 loss = output.float().square().mean() + 0.01 * aux_loss.float()
 loss.backward()
+optimizer.step()
+optimizer.zero_grad(set_to_none=True)
 ```
+
+Use `SONICMOE_MXFP8_POLICY=mxfp8` to run expert forward, dgrad, and
+wgrad GEMMs in MXFP8. To disable MXFP8 completely, keep the environment
+variable unset and select `KernelBackendMoE.sonicmoe` at the call site; the
+policy variable only affects `KernelBackendMoE.sonicmoe_mxfp8`.
 
 Install the paired, commit-pinned Quack implementation with
 `requirements-sm100-mxfp8.txt`. See
-[the SM100 MXFP8 guide](docs/sm100_mxfp8_training.md) for requirements,
-inference usage, validation, and benchmark results.
+[the SM100 MXFP8 guide](docs/sm100_mxfp8_training.md) for the complete policy
+table, requirements, inference usage, validation, and benchmark results.
 
 ## 🧪 Testing
 

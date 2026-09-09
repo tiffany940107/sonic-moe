@@ -1,10 +1,11 @@
 # SM100 MXFP8 training
 
-This branch adds a single-GPU SM100 backend that runs every expert GEMM with
-OCP MXFP8 E4M3 values and E8M0 scales. Model parameters remain BF16 and
-optimizer state remains in the optimizer-selected precision. Router logits,
-the final routed reduction, bias gradients, and other sensitive reductions use
-BF16 or FP32 as appropriate.
+This branch adds a single-GPU SM100 backend with MXFP8 expert forward GEMMs and
+separately selectable input-gradient (dgrad) and weight-gradient (wgrad)
+precision. MXFP8 operands use OCP E4M3 values and E8M0 scales. Model parameters
+remain BF16 and optimizer state remains in the optimizer-selected precision.
+Router logits, the final routed reduction, bias gradients, and other sensitive
+reductions use BF16 or FP32 as appropriate.
 
 ## Requirements
 
@@ -29,16 +30,81 @@ python -m pip install -e ../quack
 python -m pip install -e .
 ```
 
+## Precision policy
+
+Set `SONICMOE_MXFP8_POLICY` before constructing the `MoE` module. The value is
+read when the module creates its MXFP8 workspace; changing the environment
+variable later does not reconfigure an existing module.
+
+The two supported end-user training policies are:
+
+| Policy | Expert forward | FC1/FC2 dgrad | FC1/FC2 wgrad | Intended use |
+|---|---|---|---|---|
+| `auto` (default) | MXFP8 | BF16 | BF16 | Fastest validated single-GPU policy |
+| `mxfp8` | MXFP8 | MXFP8 | MXFP8 | Full expert-GEMM MXFP8 evaluation |
+
+`auto` currently means the fixed precision assignment shown above; it is not a
+runtime shape autotuner. `forward_only` is an exact alias retained for
+experiments. If neither `SONICMOE_MXFP8_POLICY` nor the legacy
+`SONICMOE_MXFP8_WGRAD` variable is set, the policy defaults to `auto`.
+
+Enable the default mixed policy explicitly with:
+
+```bash
+SONICMOE_MXFP8_POLICY=auto python train.py
+```
+
+Disable `auto` but keep the MXFP8 backend, making all expert forward/backward
+GEMMs MXFP8, with:
+
+```bash
+SONICMOE_MXFP8_POLICY=mxfp8 python train.py
+```
+
+To disable MXFP8 completely, select the BF16 Sonic backend in the model call:
+
+```python
+output, aux_loss = moe(
+    x,
+    kernel_backend_moe=KernelBackendMoE.sonicmoe,
+)
+```
+
+The environment policy only affects calls using
+`KernelBackendMoE.sonicmoe_mxfp8`. In particular,
+`SONICMOE_MXFP8_POLICY=bf16` does **not** select the all-BF16 backend: it is an
+internal ablation that keeps expert forward and dgrad in MXFP8 while moving
+wgrad to BF16.
+
+Additional per-role ablation policies are available for kernel development:
+
+| Policy | FC1 dgrad | FC2 dgrad | FC1 wgrad | FC2 wgrad |
+|---|---|---|---|---|
+| `bf16` | MXFP8 | MXFP8 | BF16 | BF16 |
+| `fc1_bf16` | MXFP8 | MXFP8 | BF16 | MXFP8 |
+| `fc2_bf16` | MXFP8 | MXFP8 | MXFP8 | BF16 |
+| `dgrad_bf16` | BF16 | BF16 | MXFP8 | MXFP8 |
+| `fc1_dgrad_bf16` | BF16 | MXFP8 | BF16 | BF16 |
+| `fc2_dgrad_bf16` | MXFP8 | BF16 | BF16 | BF16 |
+
+These ablation policies are not a way to disable the MXFP8 backend. The fused
+`Mxfp8SGD` optimizer accepts the symmetric `auto`/`forward_only` and `mxfp8`
+policies; use a standard PyTorch optimizer for the other ablations.
+
 ## Training and inference
 
 Construct `MoE` exactly as for the BF16 Sonic backend, then select the MXFP8
 backend at the call site:
 
 ```python
-from sonicmoe import KernelBackendMoE, MoE
+from sonicmoe import KernelBackendMoE, MoE, Mxfp8SGD
 
 moe = MoE(...).cuda().to(torch.bfloat16)
 x = torch.randn(tokens, hidden_size, device="cuda", dtype=torch.bfloat16)
+
+# Optional optimizer-integrated cache refresh for plain SGD. Parameters stay
+# BF16; momentum and weight decay are intentionally not supported here.
+optimizer = Mxfp8SGD(moe, lr=1e-3)
 
 # Full autograd path, including input, router, expert-weight, and bias gradients.
 output, aux_loss = moe(
@@ -46,6 +112,8 @@ output, aux_loss = moe(
     kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8,
 )
 (output.float().square().mean() + 0.01 * aux_loss.float()).backward()
+optimizer.step()
+optimizer.zero_grad(set_to_none=True)
 
 # No FC1 preactivation is materialized in inference mode.
 with torch.inference_mode():
@@ -101,9 +169,17 @@ the official BF16 Sonic backend and this MXFP8 backend:
 
 ```bash
 python benchmarks/benchmark_sm100_mxfp8.py \
-  --mode forward --tokens 2048 --experts 8 --top-k 2 \
-  --hidden 4096 --intermediate 4096 --warmup 5 --repeats 20
+  --mode training --optimizer-step \
+  --tokens 1024 --experts 8 --top-k 2 \
+  --hidden 2048 --intermediate 2048 \
+  --mxfp8-policy auto \
+  --backends sonicmoe sonicmoe_mxfp8_fused_sgd \
+  --interleave --warmup 30 --repeats 200
 ```
+
+Replace `--mxfp8-policy auto` with `--mxfp8-policy mxfp8` to benchmark
+full-MXFP8 backward. The BF16 comparison is selected independently by the
+`sonicmoe` backend entry.
 
 Recorded results and the exact environment are in
 `benchmark_results/sm100-mxfp8-training/README.md`.

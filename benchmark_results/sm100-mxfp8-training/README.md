@@ -42,6 +42,13 @@ must not be reported as a full-MXFP8 result. With policy `mxfp8`, all six
 expert forward/backward GEMMs use MXFP8; its current speedups are `1.28599x`
 without an optimizer and `1.19915x` for the optimizer-inclusive step.
 
+For application code, set `SONICMOE_MXFP8_POLICY=auto` (the default) before
+constructing `MoE`. Set it to `mxfp8` for full-MXFP8 expert backward. To turn
+off MXFP8 altogether, select `KernelBackendMoE.sonicmoe`; the environment
+policy only configures `KernelBackendMoE.sonicmoe_mxfp8`. See the
+[precision-policy guide](../../docs/sm100_mxfp8_training.md#precision-policy)
+for the complete table and optimizer restrictions.
+
 Reproduce an acceptance run from the workspace root with:
 
 ```bash

@@ -55,7 +55,11 @@ _FUSE_VARLEN_K_PAIR = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_K_PAIR", "1") =
 
 @dataclass(frozen=True)
 class Mxfp8TrainingPolicy:
-    """Precision choices for training GEMM roles under evaluation."""
+    """Backward GEMM precision choices for the MXFP8 expert-forward backend.
+
+    Expert forward GEMMs always use MXFP8. These fields independently select
+    MXFP8 or BF16 for the two input-gradient and two weight-gradient GEMMs.
+    """
 
     fc1_dgrad: str = "mxfp8"
     fc2_dgrad: str = "mxfp8"
