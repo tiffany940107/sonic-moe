@@ -27,6 +27,7 @@ def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
     "training_policy",
     [
         Mxfp8TrainingPolicy(),
+        Mxfp8TrainingPolicy(fc1_wgrad="bf16", fc2_wgrad="bf16"),
         Mxfp8TrainingPolicy(
             fc1_dgrad="bf16",
             fc2_dgrad="bf16",

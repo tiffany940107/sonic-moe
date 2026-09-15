@@ -33,6 +33,9 @@ if _VARLEN_DUAL_BLOCK_N not in (32, 64, 128):
 _VARLEN_DUAL_NUM_WARPS = int(os.environ.get("SONICMOE_MXFP8_VARLEN_DUAL_WARPS", "4"))
 if _VARLEN_DUAL_NUM_WARPS not in (4, 8):
     raise ValueError("SONICMOE_MXFP8_VARLEN_DUAL_WARPS must be 4 or 8")
+_GATHER_SF_BLOCK_M = int(os.environ.get("SONICMOE_MXFP8_GATHER_SF_BLOCK_M", "32"))
+if _GATHER_SF_BLOCK_M not in (8, 16, 32, 64, 128):
+    raise ValueError("SONICMOE_MXFP8_GATHER_SF_BLOCK_M must be 8, 16, 32, 64, or 128")
 
 
 @triton.jit
@@ -143,6 +146,133 @@ def _rowwise_varlen_m_kernel(
         tl.reshape(scale_byte, [BLOCK_M, BLOCK_K // 32]).to(tl.uint8),
         mask=row_mask[:, None],
     )
+
+
+@triton.jit
+def _physical_rowwise_linear_sf_kernel(
+    x_ptr,
+    q_ptr,
+    linear_sf_ptr,
+    M: tl.constexpr,
+    K: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    """Quantize physical rows once and retain their scales in a linear scratch."""
+    row_tile = tl.program_id(0)
+    k_tile = tl.program_id(1)
+    rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+    row_mask = rows < M
+    offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
+    values = tl.load(
+        x_ptr + rows[:, None] * K + offsets[None, :],
+        mask=row_mask[:, None],
+        other=0.0,
+    ).to(tl.float32)
+    groups = tl.reshape(values, [BLOCK_M * (BLOCK_K // 32), 32])
+    amax = tl.max(tl.abs(groups), axis=1)
+    scale_byte, scale = _rceil_e8m0(amax)
+    scaled = tl.maximum(tl.minimum(groups / scale[:, None], 448.0), -448.0)
+    tl.store(
+        q_ptr + rows[:, None] * K + offsets[None, :],
+        tl.reshape(scaled, [BLOCK_M, BLOCK_K]).to(tl.float8e4nv),
+        mask=row_mask[:, None],
+    )
+    k_blocks = k_tile * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
+    tl.store(
+        linear_sf_ptr + rows[:, None] * (K // 32) + k_blocks[None, :],
+        tl.reshape(scale_byte, [BLOCK_M, BLOCK_K // 32]).to(tl.uint8),
+        mask=row_mask[:, None],
+    )
+
+
+@triton.jit
+def _physical_rowwise_route_sf_kernel(
+    x_ptr,
+    reverse_ptr,
+    q_ptr,
+    sf_ptr,
+    cu_ptr,
+    M: tl.constexpr,
+    K: tl.constexpr,
+    E: tl.constexpr,
+    RK: tl.constexpr,
+    TOP_K: tl.constexpr,
+    N_SEARCH_ITERS: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    """Quantize physical tokens once and scatter scales to all routed rows."""
+    row_tile = tl.program_id(0)
+    k_tile = tl.program_id(1)
+    rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+    row_mask = rows < M
+    offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
+    values = tl.load(
+        x_ptr + rows[:, None] * K + offsets[None, :],
+        mask=row_mask[:, None],
+        other=0.0,
+    ).to(tl.float32)
+    groups = tl.reshape(values, [BLOCK_M * (BLOCK_K // 32), 32])
+    amax = tl.max(tl.abs(groups), axis=1)
+    scale_byte, scale = _rceil_e8m0(amax)
+    scaled = tl.maximum(tl.minimum(groups / scale[:, None], 448.0), -448.0)
+    tl.store(
+        q_ptr + rows[:, None] * K + offsets[None, :],
+        tl.reshape(scaled, [BLOCK_M, BLOCK_K]).to(tl.float8e4nv),
+        mask=row_mask[:, None],
+    )
+
+    k_blocks = k_tile * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
+    scale_byte = tl.reshape(scale_byte, [BLOCK_M, BLOCK_K // 32]).to(tl.uint8)
+    for route_slot in tl.static_range(TOP_K):
+        original_route = rows * TOP_K + route_slot
+        routed_row = tl.load(reverse_ptr + original_route, mask=row_mask, other=0)
+        expert = _find_expert_for_row(cu_ptr, routed_row, E, N_SEARCH_ITERS)
+        expert_start = tl.load(cu_ptr + expert)
+        padded_row = (expert_start // 128 + expert) * 128 + routed_row - expert_start
+        rm = padded_row[:, None] // 128
+        row_inner = padded_row[:, None] % 32
+        row_outer = (padded_row[:, None] % 128) // 32
+        rk = k_blocks[None, :] // 4
+        k_inner = k_blocks[None, :] % 4
+        sf_offset = (((rm * RK + rk) * 32 + row_inner) * 4 + row_outer) * 4 + k_inner
+        tl.store(sf_ptr + sf_offset, scale_byte, mask=row_mask[:, None])
+
+
+@triton.jit
+def _gather_varlen_m_scale_kernel(
+    linear_sf_ptr,
+    gather_ptr,
+    sf_ptr,
+    cu_ptr,
+    TOTAL_M: tl.constexpr,
+    E: tl.constexpr,
+    RK: tl.constexpr,
+    N_SEARCH_ITERS: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+):
+    """Gather only scale bytes and store the expert-padded blocked layout."""
+    row_tile = tl.program_id(0)
+    rk = tl.program_id(1)
+    rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+    row_mask = rows < TOTAL_M
+    source_rows = tl.load(gather_ptr + rows, mask=row_mask, other=0)
+    k_inner = tl.arange(0, 4)
+    scale_byte = tl.load(
+        linear_sf_ptr + source_rows[:, None] * (RK * 4) + rk * 4 + k_inner[None, :],
+        mask=row_mask[:, None],
+        other=0,
+    )
+
+    expert = _find_expert_for_row(cu_ptr, rows, E, N_SEARCH_ITERS)
+    expert_start = tl.load(cu_ptr + expert)
+    padded_row = (expert_start // 128 + expert) * 128 + rows - expert_start
+    rm = padded_row[:, None] // 128
+    row_inner = padded_row[:, None] % 32
+    row_outer = (padded_row[:, None] % 128) // 32
+    sf_offset = (((rm * RK + rk) * 32 + row_inner) * 4 + row_outer) * 4 + k_inner
+    tl.store(sf_ptr + sf_offset, scale_byte, mask=row_mask[:, None])
 
 
 @triton.jit
@@ -1689,6 +1819,129 @@ def quantize_mxfp8_varlen_m(
     return BlockScaledOperand.from_parts(qdata, scale, MXFP8_E4M3, orig_dtype=x.dtype)
 
 
+def quantize_mxfp8_gather_varlen_m(
+    x: torch.Tensor,
+    cu_seqlens_m: torch.Tensor,
+    gather_idx: torch.Tensor,
+    *,
+    reverse_idx: torch.Tensor | None = None,
+    top_k: int | None = None,
+    qdata_out: torch.Tensor | None = None,
+    scale_out: torch.Tensor | None = None,
+    linear_scale_out: torch.Tensor | None = None,
+) -> BlockScaledOperand:
+    """Quantize ``x=(T, K)`` once and gather only scales into routed order.
+
+    The returned qdata remains ``(T, K)``. Its scale buffer describes the
+    logical ``gather_idx`` rows, so consumers must receive the same gather
+    indices through Quack's block-scaled variable-M ``A_idx`` interface.
+
+    When router inverse-permutation ``reverse_idx`` and ``top_k`` are supplied,
+    each physical token is quantized once and its scale is scattered to all
+    logical routes in the same launch. Without them, a generic two-launch path
+    quantizes physical rows once and gathers the much smaller linear scale
+    buffer.
+    """
+    experts, total = _validate(x, cu_seqlens_m, gather_idx)
+    physical_m, k = x.shape
+    if k % _SF_ATOM:
+        raise ValueError(f"K={k} must be divisible by {_SF_ATOM}")
+    padded_rm = (total + _SF_ATOM - 1) // _SF_ATOM + experts - 1
+    rk = k // _SF_ATOM
+    q_shape = tuple(x.shape)
+    sf_shape = (1, padded_rm, rk, 32, 4, 4)
+    linear_sf_shape = (physical_m, k // _SF_VEC)
+    qdata = (
+        torch.empty(q_shape, dtype=MXFP8_E4M3.qdata_dtype, device=x.device)
+        if qdata_out is None
+        else qdata_out
+    )
+    scale = (
+        torch.empty(sf_shape, dtype=MXFP8_E4M3.scale_dtype, device=x.device)
+        if scale_out is None
+        else scale_out
+    )
+    _check_outputs(qdata, scale, q_shape, sf_shape)
+    one_launch = reverse_idx is not None or top_k is not None
+    if one_launch:
+        if reverse_idx is None or top_k is None:
+            raise ValueError("reverse_idx and top_k must be supplied together")
+        if (
+            reverse_idx.shape != gather_idx.shape
+            or reverse_idx.dtype != torch.int32
+            or reverse_idx.device != x.device
+            or not reverse_idx.is_contiguous()
+        ):
+            raise ValueError(
+                "reverse_idx must match gather_idx as a contiguous CUDA int32 tensor"
+            )
+        if top_k <= 0 or physical_m * top_k != total:
+            raise ValueError("top_k must be positive and T * top_k must equal routed rows")
+        _physical_rowwise_route_sf_kernel[
+            (triton.cdiv(physical_m, _GATHER_SF_BLOCK_M), k // _SF_ATOM)
+        ](
+            x,
+            reverse_idx,
+            qdata,
+            scale.view(torch.uint8),
+            cu_seqlens_m,
+            M=physical_m,
+            K=k,
+            E=experts,
+            RK=rk,
+            TOP_K=top_k,
+            N_SEARCH_ITERS=experts.bit_length(),
+            BLOCK_M=_GATHER_SF_BLOCK_M,
+            BLOCK_K=_SF_ATOM,
+            num_warps=4,
+        )
+        return BlockScaledOperand.from_parts(
+            qdata, scale, MXFP8_E4M3, orig_dtype=x.dtype
+        )
+
+    linear_scale = (
+        torch.empty(linear_sf_shape, dtype=torch.uint8, device=x.device)
+        if linear_scale_out is None
+        else linear_scale_out
+    )
+    if (
+        linear_scale.shape != linear_sf_shape
+        or linear_scale.dtype != torch.uint8
+        or not linear_scale.is_contiguous()
+    ):
+        raise ValueError(
+            f"linear_scale_out must be contiguous uint8 with shape {linear_sf_shape}"
+        )
+
+    _physical_rowwise_linear_sf_kernel[
+        (triton.cdiv(physical_m, _VARLEN_BLOCK_M), k // _SF_ATOM)
+    ](
+        x,
+        qdata,
+        linear_scale,
+        M=physical_m,
+        K=k,
+        BLOCK_M=_VARLEN_BLOCK_M,
+        BLOCK_K=_SF_ATOM,
+        num_warps=4,
+    )
+    _gather_varlen_m_scale_kernel[
+        (triton.cdiv(total, _GATHER_SF_BLOCK_M), rk)
+    ](
+        linear_scale,
+        gather_idx,
+        scale.view(torch.uint8),
+        cu_seqlens_m,
+        TOTAL_M=total,
+        E=experts,
+        RK=rk,
+        N_SEARCH_ITERS=experts.bit_length(),
+        BLOCK_M=_GATHER_SF_BLOCK_M,
+        num_warps=4,
+    )
+    return BlockScaledOperand.from_parts(qdata, scale, MXFP8_E4M3, orig_dtype=x.dtype)
+
+
 def quantize_mxfp8_varlen_k(
     x: torch.Tensor,
     cu_seqlens_k: torch.Tensor,
@@ -1911,6 +2164,7 @@ def quantize_mxfp8_varlen_dual(
 __all__ = [
     "launch_sgd_update_and_quantize_mxfp8_weight",
     "launch_sgd_update_and_quantize_mxfp8_weight_dual",
+    "quantize_mxfp8_gather_varlen_m",
     "quantize_mxfp8_varlen_dual",
     "quantize_mxfp8_varlen_k",
     "quantize_mxfp8_varlen_k_pair",

@@ -5,6 +5,9 @@ import pytest
 import torch
 from quack.blockscaled import MXFP8_E4M3, BlockScaledOperand, unpack_scale_blocked_to_2d
 from quack.blockscaled import (
+    quantize_mxfp8_gather_varlen_m as quantize_mxfp8_gather_varlen_m_ref,
+)
+from quack.blockscaled import (
     quantize_mxfp8_varlen_k as quantize_mxfp8_varlen_k_ref,
 )
 from quack.blockscaled import (
@@ -17,6 +20,7 @@ from sonicmoe.functional.triton_kernels import (
     topk_router_workspace_shape,
 )
 from sonicmoe.functional.triton_kernels.mxfp8_quant import (
+    quantize_mxfp8_gather_varlen_m,
     quantize_mxfp8_varlen_dual,
     quantize_mxfp8_varlen_k,
     quantize_mxfp8_varlen_k_pair,
@@ -78,6 +82,47 @@ def test_routed_varlen_m_quantization_matches_quack():
     cu = torch.tensor([0, 0, 1, 34, 34, 163], dtype=torch.int32, device="cuda")
     expected = quantize_mxfp8_varlen_m_ref(x[gather.long()].contiguous(), cu)
     actual = quantize_mxfp8_varlen_m(x, cu, gather_idx=gather)
+    assert torch.equal(actual.qdata, expected.qdata)
+    assert torch.equal(
+        _active_varlen_m_scales(actual, cu).view(torch.uint8),
+        _active_varlen_m_scales(expected, cu).view(torch.uint8),
+    )
+
+
+def test_zero_material_gather_varlen_m_quantization_matches_quack():
+    _skip_if_not_sm100()
+    torch.manual_seed(11)
+    x = torch.randn(137, 256, dtype=torch.bfloat16, device="cuda")
+    gather = torch.randint(137, (258,), dtype=torch.int32, device="cuda")
+    cu = torch.tensor([0, 1, 129, 129, 258], dtype=torch.int32, device="cuda")
+    expected = quantize_mxfp8_gather_varlen_m_ref(x, gather, cu)
+    actual = quantize_mxfp8_gather_varlen_m(x, cu, gather)
+
+    assert actual.shape == x.shape
+    assert torch.equal(actual.qdata, expected.qdata)
+    assert torch.equal(
+        _active_varlen_m_scales(actual, cu).view(torch.uint8),
+        _active_varlen_m_scales(expected, cu).view(torch.uint8),
+    )
+
+
+def test_one_launch_zero_material_gather_matches_quack():
+    _skip_if_not_sm100()
+    torch.manual_seed(12)
+    tokens, top_k = 137, 2
+    x = torch.randn(tokens, 256, dtype=torch.bfloat16, device="cuda")
+    scatter_idx = torch.randperm(tokens * top_k, device="cuda").to(torch.int32)
+    reverse_idx = torch.empty_like(scatter_idx)
+    reverse_idx[scatter_idx.long()] = torch.arange(
+        tokens * top_k, dtype=torch.int32, device="cuda"
+    )
+    gather = scatter_idx // top_k
+    cu = torch.tensor([0, 1, 129, 129, 274], dtype=torch.int32, device="cuda")
+    expected = quantize_mxfp8_gather_varlen_m_ref(x, gather, cu)
+    actual = quantize_mxfp8_gather_varlen_m(
+        x, cu, gather, reverse_idx=reverse_idx, top_k=top_k
+    )
+
     assert torch.equal(actual.qdata, expected.qdata)
     assert torch.equal(
         _active_varlen_m_scales(actual, cu).view(torch.uint8),

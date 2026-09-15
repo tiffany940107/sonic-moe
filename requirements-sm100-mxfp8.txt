@@ -1,6 +1,6 @@
 # The Quack SHA is frozen before the paired Sonic branch.
 torch>=2.11.0
-quack-kernels @ git+https://github.com/tiffany940107/quack.git@19e5278f9af9e18d6e86cfbe1881dea583694d6f
+quack-kernels @ git+https://github.com/tiffany940107/quack.git@b8aed77f0363a16e2640290cc2ddd548feebc76b
 pytest
 parameterized
 rich

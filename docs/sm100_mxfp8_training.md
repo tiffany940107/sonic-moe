@@ -91,6 +91,48 @@ These ablation policies are not a way to disable the MXFP8 backend. The fused
 `Mxfp8SGD` optimizer accepts the symmetric `auto`/`forward_only` and `mxfp8`
 policies; use a standard PyTorch optimizer for the other ablations.
 
+## Routed activation storage
+
+The precision policy above is independent of how routed MXFP8 activation
+values are stored. `SONICMOE_MXFP8_ZERO_MATERIAL_GATHER` controls whether an
+eligible rowwise cast materializes one FP8 row per route or retains one FP8 row
+per physical token and lets the Quack GEMM gather it through `A_idx`:
+
+| Value | Routed FP8 qdata | Selection |
+|---|---|---|
+| `auto` (default) | `(T, H)` for top-k >= 4; otherwise `(T * top-k, H)` | Measured crossover on B200 |
+| `0` | Always `(T * top-k, H)` | Compatibility and A/B baseline |
+| `1` | `(T, H)` whenever the rowwise path is eligible | Forced zero-materialization experiment |
+
+The zero-material path quantizes each physical token once. In the same Triton
+launch it uses the router inverse permutation to scatter only E8M0 scale bytes
+into expert-grouped order; the much larger E4M3 qdata remains physical. The
+FC1 GEMM then receives the original route gather indices. This reduces the
+activation qdata footprint by `top-k` without changing routing semantics.
+
+`auto` intentionally keeps the materialized path for top-k 1/2: at the
+validated `T=1024, E=8, H=I=2048` shape, the extra indexed GEMM work did not
+amortize at top-k 2. The same interleaved microbenchmark showed the routed
+quantize-plus-FC1 pipeline improving from about 54.2 to 49.2 microseconds at
+top-k 4 and from about 98.0 to 84.3 microseconds at top-k 8. Full-MXFP8 paths
+that simultaneously create rowwise and dim-0 views may still use the fused
+dual materialized cast, because the second view is required for wgrad.
+
+The gathered FC1 mainloop uses TMA gather by default. Use
+`SONICMOE_MXFP8_FC1_TMA_GATHER=0` to select its cp.async A-load ablation, or
+leave it at `1` for the measured default. `SONICMOE_MXFP8_GATHER_SF_BLOCK_M`
+is a developer-only scale-scatter tile control; its default is 32.
+
+These variables are read when `sonicmoe.functional.mxfp8` is imported. Set
+them in the process environment before importing Sonic MoE, for example:
+
+```bash
+SONICMOE_MXFP8_POLICY=auto \
+SONICMOE_MXFP8_ZERO_MATERIAL_GATHER=auto \
+SONICMOE_MXFP8_FC1_TMA_GATHER=1 \
+python train.py
+```
+
 ## Training and inference
 
 Construct `MoE` exactly as for the BF16 Sonic backend, then select the MXFP8
@@ -130,7 +172,8 @@ requesting inference mode is an error.
 ## Implementation notes
 
 - Routed gather and rowwise MXFP8 quantization are fused, and scales are written
-  directly in the blocked E8M0 layout consumed by Quack.
+  directly in the blocked E8M0 layout consumed by Quack. Eligible top-k >= 4
+  rowwise paths keep qdata in physical-token order and scatter only scales.
 - FC1 fuses bias, gated activation, saved BF16 preactivation, and MXFP8
   requantization. The inference epilogue omits the saved preactivation.
 - Segmented K-axis casts restart scale groups at every expert boundary, so empty
@@ -180,6 +223,16 @@ python benchmarks/benchmark_sm100_mxfp8.py \
 Replace `--mxfp8-policy auto` with `--mxfp8-policy mxfp8` to benchmark
 full-MXFP8 backward. The BF16 comparison is selected independently by the
 `sonicmoe` backend entry.
+
+To isolate routed quantization, gather mainloops, and their combined FC1
+pipeline, run the backlog/interleaved microbenchmark:
+
+```bash
+python benchmarks/benchmark_mxfp8_gather.py \
+  --tokens 1024 --experts 8 --top-k 4 \
+  --hidden 2048 --intermediate 2048 \
+  --warmup 10 --trials 20 --inner 50
+```
 
 Recorded results and the exact environment are in
 `benchmark_results/sm100-mxfp8-training/README.md`.

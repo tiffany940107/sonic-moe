@@ -32,6 +32,7 @@ from .forward import _router_forward, _router_forward_grouped_scores
 from .triton_kernels.mxfp8_quant import (
     launch_sgd_update_and_quantize_mxfp8_weight,
     launch_sgd_update_and_quantize_mxfp8_weight_dual,
+    quantize_mxfp8_gather_varlen_m,
     quantize_mxfp8_varlen_dual,
     quantize_mxfp8_varlen_k,
     quantize_mxfp8_varlen_k_pair,
@@ -48,9 +49,21 @@ _FC1_TILE_N = int(os.environ.get("SONICMOE_MXFP8_FC1_TILE_N", "256"))
 _FC1_CLUSTER_M = int(os.environ.get("SONICMOE_MXFP8_FC1_CLUSTER_M", "1"))
 _FC1_CLUSTER_N = int(os.environ.get("SONICMOE_MXFP8_FC1_CLUSTER_N", "1"))
 _FC1_DYNAMIC = os.environ.get("SONICMOE_MXFP8_FC1_DYNAMIC", "1") == "1"
+_FC1_TMA_GATHER = os.environ.get("SONICMOE_MXFP8_FC1_TMA_GATHER", "1") == "1"
 _FUSE_DGATED_QUANT = os.environ.get("SONICMOE_MXFP8_FUSE_DGATED_QUANT", "1") == "1"
 _FUSE_VARLEN_DUAL = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_DUAL", "1") == "1"
 _FUSE_VARLEN_K_PAIR = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_K_PAIR", "1") == "1"
+_ZERO_MATERIAL_GATHER = os.environ.get(
+    "SONICMOE_MXFP8_ZERO_MATERIAL_GATHER", "auto"
+)
+if _ZERO_MATERIAL_GATHER not in ("auto", "0", "1"):
+    raise ValueError("SONICMOE_MXFP8_ZERO_MATERIAL_GATHER must be auto, 0, or 1")
+
+
+def _use_zero_material_gather(top_k: int) -> bool:
+    return _ZERO_MATERIAL_GATHER == "1" or (
+        _ZERO_MATERIAL_GATHER == "auto" and top_k >= 4
+    )
 
 
 @dataclass(frozen=True)
@@ -537,13 +550,18 @@ def _quantize_varlen_m(
     expert_offsets: torch.Tensor,
     *,
     gather_idx: torch.Tensor | None = None,
+    reverse_idx: torch.Tensor | None = None,
+    top_k: int | None = None,
+    zero_material_gather: bool = True,
     stream_key: tuple[int, int] | None = None,
 ) -> BlockScaledOperand:
     total_m = x.shape[0] if gather_idx is None else gather_idx.numel()
     experts = expert_offsets.numel() - 1
+    use_gather_operand = gather_idx is not None and zero_material_gather
+    q_shape = tuple(x.shape) if use_gather_operand else (total_m, x.shape[1])
     qdata = workspace.tensor(
         f"{name}.q",
-        (total_m, x.shape[1]),
+        q_shape,
         MXFP8_E4M3.qdata_dtype,
         x.device,
         stream_key=stream_key,
@@ -555,6 +573,28 @@ def _quantize_varlen_m(
         x.device,
         stream_key=stream_key,
     )
+    if use_gather_operand:
+        linear_scale = (
+            None
+            if reverse_idx is not None
+            else workspace.tensor(
+                f"{name}.linear_sf",
+                (x.shape[0], x.shape[1] // MXFP8_E4M3.sf_vec_size),
+                torch.uint8,
+                x.device,
+                stream_key=stream_key,
+            )
+        )
+        return quantize_mxfp8_gather_varlen_m(
+            x,
+            expert_offsets,
+            gather_idx,
+            reverse_idx=reverse_idx,
+            top_k=top_k,
+            qdata_out=qdata,
+            scale_out=scale,
+            linear_scale_out=linear_scale,
+        )
     return quantize_mxfp8_varlen_m(
         x,
         expert_offsets,
@@ -747,16 +787,24 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 gather_idx=x_gather_idx,
                 stream_key=stream_key,
             )
+            fc1_a_idx = None
         else:
+            zero_material_gather = (
+                _use_zero_material_gather(top_k) and _FC1_CLUSTER_N == 1
+            )
             x_mx = _quantize_varlen_m(
                 workspace,
                 "forward.x",
                 x,
                 expert_offsets,
                 gather_idx=x_gather_idx,
+                reverse_idx=s_reverse_scatter_idx,
+                top_k=top_k,
+                zero_material_gather=zero_material_gather,
                 stream_key=stream_key,
             )
             x_wgrad_mx = None
+            fc1_a_idx = x_gather_idx if zero_material_gather else None
         if is_inference_mode or workspace.training_policy.fc1_dgrad == "bf16":
             w1_mx = workspace.quantize_weight("w1.forward", w1, stream_key=stream_key)
             w1_dgrad_mx = None
@@ -807,6 +855,8 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             persistent=True,
             is_dynamic_persistent=_FC1_DYNAMIC,
             cu_seqlens_m=expert_offsets,
+            A_idx=fc1_a_idx,
+            use_tma_gather=_FC1_TMA_GATHER and fc1_a_idx is not None,
             SFA=x_mx.scale,
             SFB=w1_mx.scale,
             bs_format_a=MXFP8_E4M3.name,
@@ -922,17 +972,22 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     gather_idx=x_gather_idx,
                     stream_key=stream_key,
                 )
+                dgrad_a_idx = None
             else:
+                zero_material_gather = _use_zero_material_gather(ctx.top_k)
                 dgrad_a = _quantize_varlen_m(
                     workspace,
                     "backward.dout_m",
                     dout,
                     expert_offsets,
                     gather_idx=x_gather_idx,
+                    reverse_idx=s_reverse_scatter_idx,
+                    top_k=ctx.top_k,
+                    zero_material_gather=zero_material_gather,
                     stream_key=stream_key,
                 )
+                dgrad_a_idx = x_gather_idx if zero_material_gather else None
             dgrad_w2 = ctx.w2_dgrad_mx
-            dgrad_a_idx = None
         else:
             dgrad_a = dout
             dgrad_w2 = _weight_rows(w2)
@@ -986,6 +1041,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 tuned=_AUTOTUNE,
                 dynamic_scheduler=False,
                 cu_seqlens_m=expert_offsets,
+                A_idx=dgrad_a_idx,
                 SFA=dgrad_a.scale,
                 SFB=dgrad_w2.scale,
                 bs_format_a=MXFP8_E4M3.name,

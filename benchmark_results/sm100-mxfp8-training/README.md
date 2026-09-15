@@ -16,6 +16,42 @@ one backend wins for every MoE shape.
 | Quack | `19e5278` |
 | Precision | BF16 masters; E4M3 values + E8M0 scales for MXFP8 GEMMs |
 
+## Zero-material routed activation checkpoint (2026-09-15)
+
+Paired Quack commit `b8aed77f0363a16e2640290cc2ddd548feebc76b`
+adds block-scaled variable-M gather support to both cp.async and TMA
+mainloops. Sonic can therefore retain routed input qdata as `(T, H)` and
+scatter only E8M0 scales into expert order instead of materializing
+`(T * top-k, H)` E4M3 values.
+
+The one-launch quantize-plus-FC1 microbenchmark used `T=1024, E=8,
+H=I=2048`, 20 interleaved trials, and 50 queued launches per sample:
+
+| top-k | Materialized qdata | Gathered qdata | Materialized p50 | TMA-gather p50 | Ratio |
+|---:|---:|---:|---:|---:|---:|
+| 2 | 4 MiB | 2 MiB | 44.00 us | 45.04 us | 0.977x |
+| 4 | 8 MiB | 2 MiB | 54.16 us | 49.21 us | 1.101x |
+| 8 | 16 MiB | 2 MiB | 98.02 us | 84.32 us | 1.162x |
+
+This measured crossover defines
+`SONICMOE_MXFP8_ZERO_MATERIAL_GATHER=auto`: eligible top-k 4/8 rowwise
+paths use zero materialization, while top-k 1/2 keep the original path.
+Forcing `0` or `1` remains available for controlled A/B tests.
+
+A fresh full eager training-step regression at the accepted top-k 2 shape
+used 30 warmups and 200 interleaved samples. It includes router, auxiliary
+loss, backward, and optimizer update:
+
+| BF16 p50 | MXFP8 `auto` p50 | Speedup |
+|---:|---:|---:|
+| 2.650560 ms | 1.976160 ms | 1.34127x |
+
+The result remains above the 1.30x target; the zero-material feature is not
+selected at this shape. Correctness at this checkpoint: 35 Sonic MXFP8
+quantization/training cases and 20 targeted Quack block-scaled varlen/gather
+cases pass with compilation caches disabled. The Quack set exercises ordinary
+and fused-epilogue GEMMs with both cp.async and TMA gather.
+
 ## Optimized training acceptance result (2026-09-08)
 
 The accepted eager training step includes forward, backward, switch auxiliary

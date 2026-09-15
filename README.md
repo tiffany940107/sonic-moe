@@ -103,6 +103,13 @@ wgrad GEMMs in MXFP8. To disable MXFP8 completely, keep the environment
 variable unset and select `KernelBackendMoE.sonicmoe` at the call site; the
 policy variable only affects `KernelBackendMoE.sonicmoe_mxfp8`.
 
+Routed activation qdata is zero-materialized automatically for eligible
+top-k >= 4 rowwise paths. Set
+`SONICMOE_MXFP8_ZERO_MATERIAL_GATHER=0` to force the original materialized
+path, or `=1` to force the gathered path for performance experiments. The
+default `auto` keeps top-k 1/2 materialized based on the measured B200
+crossover. These switches must be set before importing Sonic MoE.
+
 Install the paired, commit-pinned Quack implementation with
 `requirements-sm100-mxfp8.txt`. See
 [the SM100 MXFP8 guide](docs/sm100_mxfp8_training.md) for the complete policy
