@@ -110,6 +110,13 @@ path, or `=1` to force the gathered path for performance experiments. The
 default `auto` keeps top-k 1/2 materialized based on the measured B200
 crossover. These switches must be set before importing Sonic MoE.
 
+Full `mxfp8` training automatically saves the FC1 preactivation as E4M3/E8M0
+and consumes it in the fused DGated backward. Set both
+`SONICMOE_MXFP8_SAVE_Z_FP8=0` and `SONICMOE_MXFP8_FP8_C_DGATED=0` for the
+BF16 saved-activation fallback. Set both to `1` to evaluate the same chain
+with the default BF16-backward `auto` policy. These switches are also
+import-time settings.
+
 Install the paired, commit-pinned Quack implementation with
 `requirements-sm100-mxfp8.txt`. See
 [the SM100 MXFP8 guide](docs/sm100_mxfp8_training.md) for the complete policy

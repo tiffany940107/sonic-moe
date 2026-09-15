@@ -91,6 +91,35 @@ These ablation policies are not a way to disable the MXFP8 backend. The fused
 `Mxfp8SGD` optimizer accepts the symmetric `auto`/`forward_only` and `mxfp8`
 policies; use a standard PyTorch optimizer for the other ablations.
 
+## Saved preactivation policy
+
+Training FC1 can save its full gate/up preactivation directly as E4M3 values
+plus canonical blocked E8M0 scales. Backward then loads that tensor through
+Quack's FP8-C DGated epilogue instead of writing and rereading a full BF16
+preactivation. The two parts are one composite chain:
+
+| Variable | Values | Default `auto` behavior |
+|---|---|---|
+| `SONICMOE_MXFP8_SAVE_Z_FP8` | `auto`, `0`, `1` | Enable for full `mxfp8` backward |
+| `SONICMOE_MXFP8_FP8_C_DGATED` | `auto`, `0`, `1` | Enable for full `mxfp8` backward |
+
+If either variable is `0`, FC1 saves BF16 and backward uses the original
+BF16-C path. Setting both to `1` forces FP8 saved activations even when the
+`auto` precision policy uses BF16 dgrad/wgrad GEMMs. This changes saved-tensor
+precision, not the mainloop precision selected by the policy.
+
+`SONICMOE_MXFP8_FP8_C_FUSE_DQUANT=1` additionally makes full-MXFP8 DGated
+emit the rowwise MXFP8 dpreactivation used by FC1 dgrad. Its default is `0`
+while register pressure and the shape crossover are being characterized.
+
+Saved E4M3 values and their scales are invocation-owned, rather than reusable
+workspace tensors. This supports two live forwards before backward and avoids
+cross-invocation corruption. The columnwise MXFP8 input saved for FC1 wgrad
+and the grouped router scores follow the same ownership rule; immediately
+consumed rowwise tensors continue to use the reusable workspace. These three
+variables are read when `sonicmoe.functional.mxfp8` is imported, so set them
+before importing Sonic MoE.
+
 ## Routed activation storage
 
 The precision policy above is independent of how routed MXFP8 activation
@@ -130,6 +159,8 @@ them in the process environment before importing Sonic MoE, for example:
 SONICMOE_MXFP8_POLICY=auto \
 SONICMOE_MXFP8_ZERO_MATERIAL_GATHER=auto \
 SONICMOE_MXFP8_FC1_TMA_GATHER=1 \
+SONICMOE_MXFP8_SAVE_Z_FP8=auto \
+SONICMOE_MXFP8_FP8_C_DGATED=auto \
 python train.py
 ```
 
@@ -174,8 +205,9 @@ requesting inference mode is an error.
 - Routed gather and rowwise MXFP8 quantization are fused, and scales are written
   directly in the blocked E8M0 layout consumed by Quack. Eligible top-k >= 4
   rowwise paths keep qdata in physical-token order and scatter only scales.
-- FC1 fuses bias, gated activation, saved BF16 preactivation, and MXFP8
-  requantization. The inference epilogue omits the saved preactivation.
+- FC1 fuses bias, gated activation, and MXFP8 quantization. It can save either
+  BF16 preactivation or an invocation-owned E4M3/E8M0 pair. The inference
+  epilogue omits the saved preactivation.
 - Segmented K-axis casts restart scale groups at every expert boundary, so empty
   experts and non-aligned expert token counts are supported without scale-group
   leakage.
@@ -219,6 +251,11 @@ python benchmarks/benchmark_sm100_mxfp8.py \
   --backends sonicmoe sonicmoe_mxfp8_fused_sgd \
   --interleave --warmup 30 --repeats 200
 ```
+
+Add `--save-z-fp8 1 --fp8-c-dgated 1` to force the FP8 saved-activation
+chain, or pass both as `0` for the BF16-C A/B baseline. For full-MXFP8, add
+`--fp8-c-fuse-dquant 1` to measure the heavier fused backward epilogue. The
+JSON output records all three resolved settings.
 
 Replace `--mxfp8-policy auto` with `--mxfp8-policy mxfp8` to benchmark
 full-MXFP8 backward. The BF16 comparison is selected independently by the

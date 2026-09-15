@@ -21,6 +21,9 @@ from quack.blockscaled import (
 )
 from quack.epilogue.library import (
     dgated_dquant_mod,
+    dgated_fp8_preact_dquant_mod,
+    dgated_fp8_preact_mod,
+    gated_preact_postact_quant_mod,
     gated_preact_quant_mod,
     gated_quant_mod,
 )
@@ -53,9 +56,19 @@ _FC1_TMA_GATHER = os.environ.get("SONICMOE_MXFP8_FC1_TMA_GATHER", "1") == "1"
 _FUSE_DGATED_QUANT = os.environ.get("SONICMOE_MXFP8_FUSE_DGATED_QUANT", "1") == "1"
 _FUSE_VARLEN_DUAL = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_DUAL", "1") == "1"
 _FUSE_VARLEN_K_PAIR = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_K_PAIR", "1") == "1"
-_ZERO_MATERIAL_GATHER = os.environ.get(
-    "SONICMOE_MXFP8_ZERO_MATERIAL_GATHER", "auto"
-)
+
+
+def _tristate_env(name: str, default: str = "auto") -> str:
+    value = os.environ.get(name, default)
+    if value not in ("auto", "0", "1"):
+        raise ValueError(f"{name} must be auto, 0, or 1")
+    return value
+
+
+_SAVE_Z_FP8 = _tristate_env("SONICMOE_MXFP8_SAVE_Z_FP8")
+_FP8_C_DGATED = _tristate_env("SONICMOE_MXFP8_FP8_C_DGATED")
+_FP8_C_FUSE_DQUANT = os.environ.get("SONICMOE_MXFP8_FP8_C_FUSE_DQUANT", "0") == "1"
+_ZERO_MATERIAL_GATHER = os.environ.get("SONICMOE_MXFP8_ZERO_MATERIAL_GATHER", "auto")
 if _ZERO_MATERIAL_GATHER not in ("auto", "0", "1"):
     raise ValueError("SONICMOE_MXFP8_ZERO_MATERIAL_GATHER must be auto, 0, or 1")
 
@@ -88,6 +101,15 @@ class Mxfp8TrainingPolicy:
         ):
             if mode not in ("mxfp8", "bf16"):
                 raise ValueError(f"{role} must be 'mxfp8' or 'bf16', got {mode!r}")
+
+
+def _use_fp8_saved_preact(policy: Mxfp8TrainingPolicy) -> bool:
+    auto_enable = policy.fc2_dgrad == "mxfp8"
+
+    def enabled(value: str) -> bool:
+        return value == "1" or (value == "auto" and auto_enable)
+
+    return enabled(_SAVE_Z_FP8) and enabled(_FP8_C_DGATED)
 
 
 @dataclass
@@ -687,6 +709,7 @@ def _quantize_varlen_dual(
     expert_offsets: torch.Tensor,
     *,
     gather_idx: torch.Tensor | None = None,
+    invocation_owned_col: bool = False,
     stream_key: tuple[int, int] | None = None,
 ) -> tuple[BlockScaledOperand, BlockScaledOperand]:
     total_m = x.shape[0] if gather_idx is None else gather_idx.numel()
@@ -706,20 +729,36 @@ def _quantize_varlen_dual(
         x.device,
         stream_key=stream_key,
     )
-    col_qdata = workspace.tensor(
-        f"{name}.col.q",
-        q_shape,
-        MXFP8_E4M3.qdata_dtype,
-        x.device,
-        stream_key=stream_key,
-    )
-    col_scale = workspace.tensor(
-        f"{name}.col.sf",
-        _varlen_k_scale_shape(total_m, x.shape[1], experts),
-        MXFP8_E4M3.scale_dtype,
-        x.device,
-        stream_key=stream_key,
-    )
+    col_scale_shape = _varlen_k_scale_shape(total_m, x.shape[1], experts)
+    if invocation_owned_col:
+        # The columnwise operand is saved until backward. A second live
+        # forward may reuse the rowwise scratch, but must not overwrite this
+        # invocation's FC1 weight-gradient input.
+        col_qdata = torch.empty(
+            q_shape,
+            dtype=MXFP8_E4M3.qdata_dtype,
+            device=x.device,
+        )
+        col_scale = torch.empty(
+            col_scale_shape,
+            dtype=MXFP8_E4M3.scale_dtype,
+            device=x.device,
+        )
+    else:
+        col_qdata = workspace.tensor(
+            f"{name}.col.q",
+            q_shape,
+            MXFP8_E4M3.qdata_dtype,
+            x.device,
+            stream_key=stream_key,
+        )
+        col_scale = workspace.tensor(
+            f"{name}.col.sf",
+            col_scale_shape,
+            MXFP8_E4M3.scale_dtype,
+            x.device,
+            stream_key=stream_key,
+        )
     return quantize_mxfp8_varlen_dual(
         x,
         expert_offsets,
@@ -785,6 +824,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 x,
                 expert_offsets,
                 gather_idx=x_gather_idx,
+                invocation_owned_col=True,
                 stream_key=stream_key,
             )
             fc1_a_idx = None
@@ -812,13 +852,31 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             w1_mx, w1_dgrad_mx = workspace.quantize_weight_pair(
                 "w1", w1, stream_key=stream_key
             )
-        preact = (
-            None
-            if is_inference_mode
-            else torch.empty(
+        save_fp8_preact = not is_inference_mode and _use_fp8_saved_preact(
+            workspace.training_policy
+        )
+        if is_inference_mode:
+            preact = None
+            preact_sf = None
+        elif save_fp8_preact:
+            # Both tensors outlive this forward. They must be invocation-owned,
+            # unlike FC2's immediately consumed reusable postact workspace.
+            preact = torch.empty(
+                total_m,
+                2 * intermediate,
+                dtype=MXFP8_E4M3.qdata_dtype,
+                device=x.device,
+            )
+            preact_sf = torch.empty(
+                _varlen_m_scale_shape(total_m, 2 * intermediate, experts),
+                dtype=MXFP8_E4M3.scale_dtype,
+                device=x.device,
+            )
+        else:
+            preact = torch.empty(
                 total_m, 2 * intermediate, dtype=torch.bfloat16, device=x.device
             )
-        )
+            preact_sf = None
         postact_q = workspace.tensor(
             "forward.postact.q",
             (total_m, intermediate),
@@ -834,15 +892,20 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             stream_key=stream_key,
         )
         epi_args = {"postact": postact_q, "postact_sf": postact_sf}
+        if preact_sf is not None:
+            epi_args["preact_sf"] = preact_sf
         if b1 is not None:
             epi_args["mRowVecBroadcast"] = b1
-        fc1_mod = (
-            gated_quant_mod(activation_type.value, has_rowvec=b1 is not None)
-            if is_inference_mode
-            else gated_preact_quant_mod(
+        if is_inference_mode:
+            fc1_mod = gated_quant_mod(activation_type.value, has_rowvec=b1 is not None)
+        elif preact_sf is not None:
+            fc1_mod = gated_preact_postact_quant_mod(
                 activation_type.value, has_rowvec=b1 is not None
             )
-        )
+        else:
+            fc1_mod = gated_preact_quant_mod(
+                activation_type.value, has_rowvec=b1 is not None
+            )
         fc1_mod.gemm(
             x_mx.qdata,
             w1_mx.qdata,
@@ -923,6 +986,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 b2,
                 topk_scores,
                 preact,
+                preact_sf,
                 expert_offsets,
                 x_gather_idx,
                 s_scatter_idx,
@@ -944,6 +1008,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             b2,
             topk_scores,
             preact,
+            preact_sf,
             expert_offsets,
             x_gather_idx,
             s_scatter_idx,
@@ -959,7 +1024,6 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             if ctx.scores_are_grouped
             else topk_scores.reshape(-1)[s_scatter_idx].float()
         )
-
         # FC2 dgrad + gated backward + score derivative, all in one epilogue.
         dout_wgrad_mx = None
         if workspace.training_policy.fc2_dgrad == "mxfp8":
@@ -1007,12 +1071,38 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             stream_key=stream_key,
         )
         fused_dgrad_h = None
-        fuse_dgated_quant = (
-            _FUSE_DGATED_QUANT
-            and workspace.training_policy.fc2_dgrad == "mxfp8"
+        can_fuse_dgrad_h = (
+            workspace.training_policy.fc2_dgrad == "mxfp8"
             and workspace.training_policy.fc1_dgrad == "mxfp8"
         )
-        if fuse_dgated_quant:
+        fuse_bf16c_dgated_quant = (
+            preact_sf is None and _FUSE_DGATED_QUANT and can_fuse_dgrad_h
+        )
+        fuse_fp8c_dgated_quant = (
+            preact_sf is not None and _FP8_C_FUSE_DQUANT and can_fuse_dgrad_h
+        )
+        if workspace.training_policy.fc2_dgrad == "mxfp8":
+            dgrad_a_data = dgrad_a.qdata
+            dgrad_w2_data = dgrad_w2.qdata
+            mainloop_kwargs = {
+                "SFA": dgrad_a.scale,
+                "SFB": dgrad_w2.scale,
+                "bs_format_a": MXFP8_E4M3.name,
+                "bs_format_b": MXFP8_E4M3.name,
+            }
+        else:
+            dgrad_a_data = dgrad_a
+            dgrad_w2_data = dgrad_w2
+            mainloop_kwargs = {}
+        dgated_kwargs = {
+            "tuned": _AUTOTUNE,
+            "dynamic_scheduler": False,
+            "cu_seqlens_m": expert_offsets,
+            "A_idx": dgrad_a_idx,
+            "mColVecBroadcast": score_grouped,
+            **mainloop_kwargs,
+        }
+        if fuse_bf16c_dgated_quant or fuse_fp8c_dgated_quant:
             dh_q = workspace.tensor(
                 "backward.dh_m.q",
                 tuple(dh_buffer.shape),
@@ -1027,27 +1117,26 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 dout.device,
                 stream_key=stream_key,
             )
-            result = dgated_dquant_mod(
+            dquant_mod = (
+                dgated_fp8_preact_dquant_mod
+                if fuse_fp8c_dgated_quant
+                else dgated_dquant_mod
+            )
+            extra_kwargs = {"preact_scale": preact_sf} if fuse_fp8c_dgated_quant else {}
+            result = dquant_mod(
                 ctx.activation_type.value, has_scale=True, has_reduce=True
             )(
-                dgrad_a.qdata,
-                dgrad_w2.qdata,
+                dgrad_a_data,
+                dgrad_w2_data,
                 preact,
                 out={
                     "D": dh_buffer,
                     "mDQuant": dh_q,
                     "mAuxOut": scored_postact_buffer,
                 },
-                tuned=_AUTOTUNE,
-                dynamic_scheduler=False,
-                cu_seqlens_m=expert_offsets,
-                A_idx=dgrad_a_idx,
-                SFA=dgrad_a.scale,
-                SFB=dgrad_w2.scale,
-                bs_format_a=MXFP8_E4M3.name,
-                bs_format_b=MXFP8_E4M3.name,
-                mColVecBroadcast=score_grouped,
                 mDQuant_sf=dh_sf,
+                **dgated_kwargs,
+                **extra_kwargs,
             )
             dh = dh_buffer
             scored_postact = scored_postact_buffer
@@ -1058,6 +1147,20 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 MXFP8_E4M3,
                 orig_dtype=dh.dtype,
             )
+        elif preact_sf is not None:
+            result = dgated_fp8_preact_mod(
+                ctx.activation_type.value, has_scale=True, has_reduce=True
+            )(
+                dgrad_a_data,
+                dgrad_w2_data,
+                preact,
+                out={"D": dh_buffer, "mAuxOut": scored_postact_buffer},
+                preact_scale=preact_sf,
+                **dgated_kwargs,
+            )
+            dh = dh_buffer
+            scored_postact = scored_postact_buffer
+            dscore_grouped = result["mColVecReduce"]
         else:
             dh, scored_postact, dscore_grouped = gemm_dact(
                 dgrad_a,
@@ -1073,7 +1176,6 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 dynamic_scheduler=False,
                 tuned=_AUTOTUNE,
             )
-
         postact_wgrad_mx = None
         dh_wgrad_mx = None
         if (

@@ -676,13 +676,9 @@ def moe_TC_softmax_topk_layer_mxfp8(
     )
     if _MXFP8_FUSE_ROUTER_METADATA:
         if attach_router_aux:
-            grouped_topk_scores = workspace.tensor(
-                "router.grouped_scores",
-                tuple(topk_scores.shape),
-                topk_scores.dtype,
-                device,
-                stream_key=stream_key,
-            )
+            # This tensor is returned by an autograd Function and consumed by
+            # the expert backward. A second live forward must not overwrite it.
+            grouped_topk_scores = torch.empty_like(topk_scores)
             router_aux_loss = TC_topk_router_metadata_switch_aux_triton_fused(
                 topk_indices,
                 topk_scores,

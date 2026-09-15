@@ -17,6 +17,7 @@ from collections.abc import Callable
 
 import torch
 
+import sonicmoe.functional.mxfp8 as mxfp8_impl
 from sonicmoe import KernelBackendMoE, MoE, Mxfp8SGD
 from sonicmoe.enums import ActivationType
 
@@ -298,6 +299,9 @@ def main() -> None:
             "while mxfp8 uses MXFP8 for all expert GEMMs"
         ),
     )
+    parser.add_argument("--save-z-fp8", choices=("auto", "0", "1"))
+    parser.add_argument("--fp8-c-dgated", choices=("auto", "0", "1"))
+    parser.add_argument("--fp8-c-fuse-dquant", choices=("0", "1"))
     parser.add_argument(
         "--backends",
         nargs="+",
@@ -321,6 +325,12 @@ def main() -> None:
         parser.error("fused MXFP8 SGD requires the auto, forward_only, or mxfp8 policy")
     if args.mxfp8_policy is not None:
         os.environ["SONICMOE_MXFP8_POLICY"] = args.mxfp8_policy
+    if args.save_z_fp8 is not None:
+        mxfp8_impl._SAVE_Z_FP8 = args.save_z_fp8
+    if args.fp8_c_dgated is not None:
+        mxfp8_impl._FP8_C_DGATED = args.fp8_c_dgated
+    if args.fp8_c_fuse_dquant is not None:
+        mxfp8_impl._FP8_C_FUSE_DQUANT = args.fp8_c_fuse_dquant == "1"
     torch.manual_seed(123)
     base = (
         MoE(
@@ -395,6 +405,11 @@ def main() -> None:
         "cuda_graph": args.cuda_graph,
         "timing_protocol": "interleaved" if args.interleave else "sequential",
         "mxfp8_policy": args.mxfp8_policy,
+        "mxfp8_saved_activation": {
+            "save_z_fp8": mxfp8_impl._SAVE_Z_FP8,
+            "fp8_c_dgated": mxfp8_impl._FP8_C_DGATED,
+            "fp8_c_fuse_dquant": mxfp8_impl._FP8_C_FUSE_DQUANT,
+        },
         "warmup": args.warmup,
         "repeats": args.repeats,
         "results": results,

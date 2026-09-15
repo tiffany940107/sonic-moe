@@ -6,6 +6,7 @@ import copy
 import pytest
 import torch
 
+import sonicmoe.functional.mxfp8 as mxfp8_impl
 from sonicmoe import (
     KernelBackendMoE,
     MoE,
@@ -20,6 +21,42 @@ def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
     numerator = (actual.float() - expected.float()).norm()
     denominator = expected.float().norm().clamp_min(1e-7)
     return (numerator / denominator).item()
+
+
+@pytest.mark.parametrize(
+    "save_z,fp8_c,policy,expected",
+    [
+        ("auto", "auto", Mxfp8TrainingPolicy(), True),
+        (
+            "auto",
+            "auto",
+            Mxfp8TrainingPolicy(
+                fc1_dgrad="bf16",
+                fc2_dgrad="bf16",
+                fc1_wgrad="bf16",
+                fc2_wgrad="bf16",
+            ),
+            False,
+        ),
+        (
+            "1",
+            "1",
+            Mxfp8TrainingPolicy(
+                fc1_dgrad="bf16",
+                fc2_dgrad="bf16",
+                fc1_wgrad="bf16",
+                fc2_wgrad="bf16",
+            ),
+            True,
+        ),
+        ("0", "1", Mxfp8TrainingPolicy(), False),
+        ("1", "0", Mxfp8TrainingPolicy(), False),
+    ],
+)
+def test_sm100_mxfp8_saved_preact_policy(monkeypatch, save_z, fp8_c, policy, expected):
+    monkeypatch.setattr(mxfp8_impl, "_SAVE_Z_FP8", save_z)
+    monkeypatch.setattr(mxfp8_impl, "_FP8_C_DGATED", fp8_c)
+    assert mxfp8_impl._use_fp8_saved_preact(policy) is expected
 
 
 @pytest.mark.parametrize("add_bias", [False, True])
@@ -111,9 +148,93 @@ def test_sm100_mxfp8_empty_experts_and_non_aligned_m():
     assert _relative_l2(y_mx, y_ref) < 0.08
     grads_ref = torch.autograd.grad(y_ref, [x_ref, *model_ref.parameters()], grad_out)
     grads_mx = torch.autograd.grad(y_mx, [x_mx, *model_mx.parameters()], grad_out)
-    for actual, expected in zip(grads_mx, grads_ref):
-        assert torch.isfinite(actual).all()
-        assert _relative_l2(actual, expected) < 0.15
+    labels = ["input", *[name for name, _ in model_ref.named_parameters()]]
+    for label, actual, expected in zip(labels, grads_mx, grads_ref):
+        assert torch.isfinite(actual).all(), label
+        error = _relative_l2(actual, expected)
+        assert error < 0.15, f"{label}: relative_l2={error}"
+
+
+@pytest.mark.parametrize(
+    "training_policy,fuse_dquant",
+    [
+        (
+            Mxfp8TrainingPolicy(
+                fc1_dgrad="bf16",
+                fc2_dgrad="bf16",
+                fc1_wgrad="bf16",
+                fc2_wgrad="bf16",
+            ),
+            False,
+        ),
+        (Mxfp8TrainingPolicy(), True),
+    ],
+    ids=("bf16-backward", "full-mxfp8-fused-dquant"),
+)
+def test_sm100_mxfp8_saved_preact_is_reentrant(
+    monkeypatch, training_policy, fuse_dquant
+):
+    """Two live forwards must not share any payload saved for backward."""
+    if torch.cuda.get_device_properties(0).major != 10:
+        pytest.skip("the single-GPU MXFP8 training backend targets SM100")
+    monkeypatch.setattr(mxfp8_impl, "_SAVE_Z_FP8", "1")
+    monkeypatch.setattr(mxfp8_impl, "_FP8_C_DGATED", "1")
+    monkeypatch.setattr(mxfp8_impl, "_FP8_C_FUSE_DQUANT", fuse_dquant)
+    torch.manual_seed(9)
+    model_ref = (
+        MoE(
+            num_experts=8,
+            num_experts_per_tok=2,
+            hidden_size=128,
+            intermediate_size=128,
+            activation_function=ActivationType.SWIGLU,
+            add_bias=True,
+            std=0.02,
+        )
+        .cuda()
+        .to(torch.bfloat16)
+    )
+    model_mx = copy.deepcopy(model_ref)
+    model_mx._mxfp8_workspace = Mxfp8Workspace(training_policy=training_policy)
+    assert mxfp8_impl._use_fp8_saved_preact(training_policy)
+
+    x_ref = [
+        torch.randn(65, 128, device="cuda", dtype=torch.bfloat16).requires_grad_()
+        for _ in range(2)
+    ]
+    x_mx = [value.detach().clone().requires_grad_() for value in x_ref]
+    grad_out = [torch.randn_like(value) for value in x_ref]
+    with torch.autocast("cuda", torch.float32):
+        y_ref = [
+            model_ref(value, kernel_backend_moe=KernelBackendMoE.torch)[0]
+            for value in x_ref
+        ]
+        y_mx = [
+            model_mx(value, kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8)[0]
+            for value in x_mx
+        ]
+    for actual, expected in zip(y_mx, y_ref):
+        assert _relative_l2(actual, expected) < 0.08
+
+    grads_ref = torch.autograd.grad(
+        y_ref,
+        [*x_ref, *model_ref.parameters()],
+        grad_outputs=grad_out,
+    )
+    grads_mx = torch.autograd.grad(
+        y_mx,
+        [*x_mx, *model_mx.parameters()],
+        grad_outputs=grad_out,
+    )
+    labels = [
+        "input.0",
+        "input.1",
+        *[name for name, _ in model_ref.named_parameters()],
+    ]
+    for label, actual, expected in zip(labels, grads_mx, grads_ref):
+        assert torch.isfinite(actual).all(), label
+        error = _relative_l2(actual, expected)
+        assert error < 0.16, f"{label}: relative_l2={error}"
 
 
 def test_sm100_mxfp8_optimizer_steps():
@@ -295,6 +416,7 @@ def test_sm100_mxfp8_activation_and_topk_coverage(activation, top_k):
         .to(torch.bfloat16)
     )
     model_mx = copy.deepcopy(model_ref)
+    model_mx._mxfp8_workspace = Mxfp8Workspace(training_policy=Mxfp8TrainingPolicy())
     x_ref = torch.randn(64, 128, device="cuda", dtype=torch.bfloat16).requires_grad_()
     x_mx = x_ref.detach().clone().requires_grad_()
     grad_out = torch.randn_like(x_ref)
