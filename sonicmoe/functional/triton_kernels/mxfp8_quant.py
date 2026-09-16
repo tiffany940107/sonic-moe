@@ -15,8 +15,17 @@ from quack.blockscaled import MXFP8_E4M3, BlockScaledOperand
 _SF_VEC = 32
 _SF_ATOM = 128
 _VARLEN_BLOCK_M = int(os.environ.get("SONICMOE_MXFP8_VARLEN_BLOCK_M", "8"))
-if _VARLEN_BLOCK_M not in (1, 2, 4, 8, 16):
-    raise ValueError("SONICMOE_MXFP8_VARLEN_BLOCK_M must be 1, 2, 4, 8, or 16")
+if _VARLEN_BLOCK_M not in (1, 2, 4, 8, 16, 32, 64):
+    raise ValueError("SONICMOE_MXFP8_VARLEN_BLOCK_M must be 1, 2, 4, 8, 16, 32, or 64")
+_PHYSICAL_ROW_NUM_WARPS = int(os.environ.get("SONICMOE_MXFP8_PHYSICAL_ROW_WARPS", "4"))
+if _PHYSICAL_ROW_NUM_WARPS not in (1, 2, 4, 8):
+    raise ValueError("SONICMOE_MXFP8_PHYSICAL_ROW_WARPS must be 1, 2, 4, or 8")
+_VARLEN_K_BLOCK_N = int(os.environ.get("SONICMOE_MXFP8_VARLEN_K_BLOCK_N", "64"))
+if _VARLEN_K_BLOCK_N not in (32, 64, 128):
+    raise ValueError("SONICMOE_MXFP8_VARLEN_K_BLOCK_N must be 32, 64, or 128")
+_VARLEN_K_NUM_WARPS = int(os.environ.get("SONICMOE_MXFP8_VARLEN_K_WARPS", "4"))
+if _VARLEN_K_NUM_WARPS not in (1, 2, 4, 8):
+    raise ValueError("SONICMOE_MXFP8_VARLEN_K_WARPS must be 1, 2, 4, or 8")
 _VARLEN_K_PAIR_BLOCK_N = int(
     os.environ.get("SONICMOE_MXFP8_VARLEN_K_PAIR_BLOCK_N", "32")
 )
@@ -25,17 +34,18 @@ if _VARLEN_K_PAIR_BLOCK_N not in (32, 64, 128):
 _VARLEN_K_PAIR_NUM_WARPS = int(
     os.environ.get("SONICMOE_MXFP8_VARLEN_K_PAIR_WARPS", "4")
 )
-if _VARLEN_K_PAIR_NUM_WARPS not in (4, 8):
-    raise ValueError("SONICMOE_MXFP8_VARLEN_K_PAIR_WARPS must be 4 or 8")
+if _VARLEN_K_PAIR_NUM_WARPS not in (1, 2, 4, 8):
+    raise ValueError("SONICMOE_MXFP8_VARLEN_K_PAIR_WARPS must be 1, 2, 4, or 8")
 _VARLEN_DUAL_BLOCK_N = int(os.environ.get("SONICMOE_MXFP8_VARLEN_DUAL_BLOCK_N", "128"))
 if _VARLEN_DUAL_BLOCK_N not in (32, 64, 128):
     raise ValueError("SONICMOE_MXFP8_VARLEN_DUAL_BLOCK_N must be 32, 64, or 128")
 _VARLEN_DUAL_NUM_WARPS = int(os.environ.get("SONICMOE_MXFP8_VARLEN_DUAL_WARPS", "4"))
-if _VARLEN_DUAL_NUM_WARPS not in (4, 8):
-    raise ValueError("SONICMOE_MXFP8_VARLEN_DUAL_WARPS must be 4 or 8")
+if _VARLEN_DUAL_NUM_WARPS not in (1, 2, 4, 8):
+    raise ValueError("SONICMOE_MXFP8_VARLEN_DUAL_WARPS must be 1, 2, 4, or 8")
 _GATHER_SF_BLOCK_M = int(os.environ.get("SONICMOE_MXFP8_GATHER_SF_BLOCK_M", "32"))
 if _GATHER_SF_BLOCK_M not in (8, 16, 32, 64, 128):
     raise ValueError("SONICMOE_MXFP8_GATHER_SF_BLOCK_M must be 8, 16, 32, 64, or 128")
+_FAST_BF16_QUANT = os.environ.get("SONICMOE_MXFP8_FAST_BF16_QUANT", "0") == "1"
 
 
 @triton.jit
@@ -51,6 +61,23 @@ def _rceil_e8m0(amax):
     scale_bits = tl.maximum(biased, 1) << 23
     scale = scale_bits.to(tl.float32, bitcast=True)
     return biased, scale
+
+
+@triton.jit
+def _rceil_e8m0_bf16_quant_scale(amax):
+    """Return bit-exact BF16 RCEIL scale bytes and reciprocal powers of two."""
+    bits = amax.to(tl.int32, bitcast=True)
+    exponent = (bits >> 23) & 0xFF
+    carry = (bits & 0x7FFFFF) > 0x600000
+    raw_scale_byte = exponent + carry.to(tl.int32) - 8
+    scale_byte = tl.where(amax != 0.0, tl.maximum(raw_scale_byte, 1), 0)
+    special = exponent == 0xFF
+    scale_byte = tl.where(special, 0xFF, scale_byte)
+    # E8M0 byte 255 reconstructs as +inf: finite / inf -> 0, while inf / inf
+    # and NaN / inf stay NaN. Multiplication by zero has the same behavior.
+    quant_bits = tl.where(special, 0, (254 - scale_byte) << 23)
+    quant_scale = quant_bits.to(tl.float32, bitcast=True)
+    return scale_byte, quant_scale
 
 
 @triton.jit
@@ -104,6 +131,7 @@ def _rowwise_varlen_m_kernel(
     N_SEARCH_ITERS: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_K: tl.constexpr,
+    FAST_BF16: tl.constexpr,
 ):
     row_tile = tl.program_id(0)
     k_tile = tl.program_id(1)
@@ -120,11 +148,15 @@ def _rowwise_varlen_m_kernel(
     ).to(tl.float32)
     groups = tl.reshape(values, [BLOCK_M * (BLOCK_K // 32), 32])
     amax = tl.max(tl.abs(groups), axis=1)
-    scale_byte, scale = _rceil_e8m0(amax)
-    scaled = tl.maximum(
-        tl.minimum(groups / scale[:, None], 448.0),
-        -448.0,
-    )
+    if FAST_BF16:
+        scale_byte, quant_scale = _rceil_e8m0_bf16_quant_scale(amax)
+        scaled = groups * quant_scale[:, None]
+    else:
+        scale_byte, scale = _rceil_e8m0(amax)
+        scaled = tl.maximum(
+            tl.minimum(groups / scale[:, None], 448.0),
+            -448.0,
+        )
     tl.store(
         q_ptr + rows[:, None] * K + offsets[None, :],
         tl.reshape(scaled, [BLOCK_M, BLOCK_K]).to(tl.float8e4nv),
@@ -157,33 +189,38 @@ def _physical_rowwise_linear_sf_kernel(
     K: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_K: tl.constexpr,
+    FAST_BF16: tl.constexpr,
 ):
     """Quantize physical rows once and retain their scales in a linear scratch."""
     row_tile = tl.program_id(0)
     k_tile = tl.program_id(1)
     rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
     row_mask = rows < M
-    offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
-    values = tl.load(
-        x_ptr + rows[:, None] * K + offsets[None, :],
-        mask=row_mask[:, None],
-        other=0.0,
-    ).to(tl.float32)
-    groups = tl.reshape(values, [BLOCK_M * (BLOCK_K // 32), 32])
-    amax = tl.max(tl.abs(groups), axis=1)
-    scale_byte, scale = _rceil_e8m0(amax)
-    scaled = tl.maximum(tl.minimum(groups / scale[:, None], 448.0), -448.0)
-    tl.store(
-        q_ptr + rows[:, None] * K + offsets[None, :],
-        tl.reshape(scaled, [BLOCK_M, BLOCK_K]).to(tl.float8e4nv),
-        mask=row_mask[:, None],
-    )
-    k_blocks = k_tile * (BLOCK_K // 32) + tl.arange(0, BLOCK_K // 32)
-    tl.store(
-        linear_sf_ptr + rows[:, None] * (K // 32) + k_blocks[None, :],
-        tl.reshape(scale_byte, [BLOCK_M, BLOCK_K // 32]).to(tl.uint8),
-        mask=row_mask[:, None],
-    )
+    for group in tl.static_range(BLOCK_K // 32):
+        offsets = k_tile * BLOCK_K + group * 32 + tl.arange(0, 32)
+        values = tl.load(
+            x_ptr + rows[:, None] * K + offsets[None, :],
+            mask=row_mask[:, None],
+            other=0.0,
+        ).to(tl.float32)
+        amax = tl.max(tl.abs(values), axis=1)
+        if FAST_BF16:
+            scale_byte, quant_scale = _rceil_e8m0_bf16_quant_scale(amax)
+            scaled = values * quant_scale[:, None]
+        else:
+            scale_byte, scale = _rceil_e8m0(amax)
+            scaled = tl.maximum(tl.minimum(values / scale[:, None], 448.0), -448.0)
+        tl.store(
+            q_ptr + rows[:, None] * K + offsets[None, :],
+            scaled.to(tl.float8e4nv),
+            mask=row_mask[:, None],
+        )
+        k_block = k_tile * (BLOCK_K // 32) + group
+        tl.store(
+            linear_sf_ptr + rows * (K // 32) + k_block,
+            scale_byte.to(tl.uint8),
+            mask=row_mask,
+        )
 
 
 @triton.jit
@@ -201,6 +238,7 @@ def _physical_rowwise_route_sf_kernel(
     N_SEARCH_ITERS: tl.constexpr,
     BLOCK_M: tl.constexpr,
     BLOCK_K: tl.constexpr,
+    FAST_BF16: tl.constexpr,
 ):
     """Quantize physical tokens once and scatter scales to all routed rows."""
     row_tile = tl.program_id(0)
@@ -215,8 +253,12 @@ def _physical_rowwise_route_sf_kernel(
     ).to(tl.float32)
     groups = tl.reshape(values, [BLOCK_M * (BLOCK_K // 32), 32])
     amax = tl.max(tl.abs(groups), axis=1)
-    scale_byte, scale = _rceil_e8m0(amax)
-    scaled = tl.maximum(tl.minimum(groups / scale[:, None], 448.0), -448.0)
+    if FAST_BF16:
+        scale_byte, quant_scale = _rceil_e8m0_bf16_quant_scale(amax)
+        scaled = groups * quant_scale[:, None]
+    else:
+        scale_byte, scale = _rceil_e8m0(amax)
+        scaled = tl.maximum(tl.minimum(groups / scale[:, None], 448.0), -448.0)
     tl.store(
         q_ptr + rows[:, None] * K + offsets[None, :],
         tl.reshape(scaled, [BLOCK_M, BLOCK_K]).to(tl.float8e4nv),
@@ -289,6 +331,7 @@ def _segmented_varlen_k_kernel(
     HAS_GATHER: tl.constexpr,
     N_SEARCH_ITERS: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    FAST_BF16: tl.constexpr,
 ):
     padded_block = tl.program_id(0)
     n_tile = tl.program_id(1)
@@ -314,8 +357,12 @@ def _segmented_varlen_k_kernel(
         other=0.0,
     ).to(tl.float32)
     amax = tl.max(tl.abs(values), axis=0)
-    scale_byte, scale = _rceil_e8m0(amax)
-    scaled = tl.maximum(tl.minimum(values / scale[None, :], 448.0), -448.0)
+    if FAST_BF16:
+        scale_byte, quant_scale = _rceil_e8m0_bf16_quant_scale(amax)
+        scaled = values * quant_scale[None, :]
+    else:
+        scale_byte, scale = _rceil_e8m0(amax)
+        scaled = tl.maximum(tl.minimum(values / scale[None, :], 448.0), -448.0)
     tl.store(
         q_ptr + rows[:, None] * N + cols[None, :],
         scaled.to(tl.float8e4nv),
@@ -347,6 +394,7 @@ def _segmented_varlen_k_pair_kernel(
     RK: tl.constexpr,
     N_SEARCH_ITERS: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    FAST_BF16: tl.constexpr,
 ):
     """Quantize two routed operands with one launch and shared metadata."""
     padded_block = tl.program_id(0)
@@ -370,8 +418,12 @@ def _segmented_varlen_k_pair_kernel(
         other=0.0,
     ).to(tl.float32)
     amax0 = tl.max(tl.abs(values0), axis=0)
-    scale0_byte, scale0 = _rceil_e8m0(amax0)
-    scaled0 = tl.maximum(tl.minimum(values0 / scale0[None, :], 448.0), -448.0)
+    if FAST_BF16:
+        scale0_byte, quant_scale0 = _rceil_e8m0_bf16_quant_scale(amax0)
+        scaled0 = values0 * quant_scale0[None, :]
+    else:
+        scale0_byte, scale0 = _rceil_e8m0(amax0)
+        scaled0 = tl.maximum(tl.minimum(values0 / scale0[None, :], 448.0), -448.0)
     tl.store(
         q0_ptr + rows[:, None] * N0 + cols[None, :],
         scaled0.to(tl.float8e4nv),
@@ -385,8 +437,12 @@ def _segmented_varlen_k_pair_kernel(
         other=0.0,
     ).to(tl.float32)
     amax1 = tl.max(tl.abs(values1), axis=0)
-    scale1_byte, scale1 = _rceil_e8m0(amax1)
-    scaled1 = tl.maximum(tl.minimum(values1 / scale1[None, :], 448.0), -448.0)
+    if FAST_BF16:
+        scale1_byte, quant_scale1 = _rceil_e8m0_bf16_quant_scale(amax1)
+        scaled1 = values1 * quant_scale1[None, :]
+    else:
+        scale1_byte, scale1 = _rceil_e8m0(amax1)
+        scaled1 = tl.maximum(tl.minimum(values1 / scale1[None, :], 448.0), -448.0)
     tl.store(
         q1_ptr + rows[:, None] * N1 + cols[None, :],
         scaled1.to(tl.float8e4nv),
@@ -428,6 +484,7 @@ def _varlen_dual_kernel(
     HAS_GATHER: tl.constexpr,
     N_SEARCH_ITERS: tl.constexpr,
     BLOCK_N: tl.constexpr,
+    FAST_BF16: tl.constexpr,
 ):
     """One routed 32xBLOCK_N read produces rowwise and segmented-K views."""
     padded_block = tl.program_id(0)
@@ -457,11 +514,15 @@ def _varlen_dual_kernel(
     # Rowwise view: 32 adjacent columns per scale, independently per row.
     row_groups = tl.reshape(values, [32 * (BLOCK_N // 32), 32])
     row_amax = tl.max(tl.abs(row_groups), axis=1)
-    row_scale_byte, row_scale = _rceil_e8m0(row_amax)
-    row_scaled = tl.maximum(
-        tl.minimum(row_groups / row_scale[:, None], 448.0),
-        -448.0,
-    )
+    if FAST_BF16:
+        row_scale_byte, row_quant_scale = _rceil_e8m0_bf16_quant_scale(row_amax)
+        row_scaled = row_groups * row_quant_scale[:, None]
+    else:
+        row_scale_byte, row_scale = _rceil_e8m0(row_amax)
+        row_scaled = tl.maximum(
+            tl.minimum(row_groups / row_scale[:, None], 448.0),
+            -448.0,
+        )
     tl.store(
         row_q_ptr + offsets,
         tl.reshape(row_scaled, [32, BLOCK_N]).to(tl.float8e4nv),
@@ -487,11 +548,15 @@ def _varlen_dual_kernel(
 
     # Segmented-K view: 32 adjacent routed rows per scale, per column.
     col_amax = tl.max(tl.abs(values), axis=0)
-    col_scale_byte, col_scale = _rceil_e8m0(col_amax)
-    col_scaled = tl.maximum(
-        tl.minimum(values / col_scale[None, :], 448.0),
-        -448.0,
-    )
+    if FAST_BF16:
+        col_scale_byte, col_quant_scale = _rceil_e8m0_bf16_quant_scale(col_amax)
+        col_scaled = values * col_quant_scale[None, :]
+    else:
+        col_scale_byte, col_scale = _rceil_e8m0(col_amax)
+        col_scaled = tl.maximum(
+            tl.minimum(values / col_scale[None, :], 448.0),
+            -448.0,
+        )
     tl.store(col_q_ptr + offsets, col_scaled.to(tl.float8e4nv), mask=value_mask)
 
     col_rm = cols // 128
@@ -505,6 +570,109 @@ def _varlen_dual_kernel(
     tl.store(
         col_sf_ptr + col_sf_offset,
         col_scale_byte.to(tl.uint8),
+        mask=block_valid & (cols < N),
+    )
+
+
+@triton.jit
+def _varlen_iso32_dual_kernel(
+    x_ptr,
+    gather_ptr,
+    q_ptr,
+    row_sf_ptr,
+    col_sf_ptr,
+    cu_ptr,
+    N: tl.constexpr,
+    E: tl.constexpr,
+    ROW_RK: tl.constexpr,
+    COL_RK: tl.constexpr,
+    HAS_GATHER: tl.constexpr,
+    N_SEARCH_ITERS: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    FAST_BF16: tl.constexpr,
+):
+    """One 32x32 scale serves rowwise and segmented-K consumers.
+
+    Adapted from PFCCLab/supersonic-moe commit 76b4f4f's public iso32
+    quantizer. Expert boundaries remain explicit here, so a scale block never
+    spans two variable-length experts.
+    """
+    padded_block = tl.program_id(0)
+    n_tile = tl.program_id(1)
+    expert = _find_expert_for_padded_block(cu_ptr, padded_block, E, N_SEARCH_ITERS)
+    start = tl.load(cu_ptr + expert)
+    end = tl.load(cu_ptr + expert + 1)
+    padded_start = (start // 128 + expert) * 4
+    active_block = padded_block - padded_start
+    active_blocks = (end - start + 31) // 32
+    block_valid = (active_block >= 0) & (active_block < active_blocks)
+
+    rows = start + active_block * 32 + tl.arange(0, 32)
+    cols = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
+    row_valid = block_valid & (rows < end)
+    value_mask = row_valid[:, None] & (cols[None, :] < N)
+    source_rows = (
+        tl.load(gather_ptr + rows, mask=row_valid, other=0) if HAS_GATHER else rows
+    )
+    values = tl.load(
+        x_ptr + source_rows[:, None] * N + cols[None, :],
+        mask=value_mask,
+        other=0.0,
+    ).to(tl.float32)
+
+    groups_per_tile: tl.constexpr = BLOCK_N // 32
+    value_groups = tl.reshape(values, [32, groups_per_tile, 32])
+    block_amax = tl.max(tl.max(tl.abs(value_groups), axis=2), axis=0)
+    if FAST_BF16:
+        scale_byte, quant_scale = _rceil_e8m0_bf16_quant_scale(block_amax)
+        scaled = value_groups * quant_scale[None, :, None]
+    else:
+        scale_byte, scale = _rceil_e8m0(block_amax)
+        scaled = tl.maximum(
+            tl.minimum(value_groups / scale[None, :, None], 448.0),
+            -448.0,
+        )
+    offsets = rows[:, None] * N + cols[None, :]
+    tl.store(
+        q_ptr + offsets,
+        tl.reshape(scaled, [32, BLOCK_N]).to(tl.float8e4nv),
+        mask=value_mask,
+    )
+
+    padded_rows = padded_block * 32 + tl.arange(0, 32)
+    row_k_blocks = n_tile * groups_per_tile + tl.arange(0, groups_per_tile)
+    row_rm = padded_rows[:, None] // 128
+    row_inner = padded_rows[:, None] % 32
+    row_outer = (padded_rows[:, None] % 128) // 32
+    row_rk = row_k_blocks[None, :] // 4
+    row_k_inner = row_k_blocks[None, :] % 4
+    row_sf_offset = (
+        ((row_rm * ROW_RK + row_rk) * 32 + row_inner) * 4 + row_outer
+    ) * 4 + row_k_inner
+    row_scale = scale_byte[None, :] + tl.zeros([32, groups_per_tile], dtype=tl.int32)
+    tl.store(
+        row_sf_ptr + row_sf_offset,
+        row_scale.to(tl.uint8),
+        mask=row_valid[:, None] & (row_k_blocks[None, :] * 32 < N),
+    )
+
+    group = tl.arange(0, groups_per_tile)
+    col_group = tl.arange(0, BLOCK_N) // 32
+    col_scale = tl.sum(
+        (col_group[:, None] == group[None, :]) * scale_byte[None, :].to(tl.int32),
+        axis=1,
+    )
+    col_rm = cols // 128
+    col_inner = cols % 32
+    col_outer = (cols % 128) // 32
+    col_rk = padded_block // 4
+    col_k_inner = padded_block % 4
+    col_sf_offset = (
+        ((col_rm * COL_RK + col_rk) * 32 + col_inner) * 4 + col_outer
+    ) * 4 + col_k_inner
+    tl.store(
+        col_sf_ptr + col_sf_offset,
+        col_scale.to(tl.uint8),
         mask=block_valid & (cols < N),
     )
 
@@ -1814,6 +1982,7 @@ def quantize_mxfp8_varlen_m(
         N_SEARCH_ITERS=experts.bit_length(),
         BLOCK_M=_VARLEN_BLOCK_M,
         BLOCK_K=_SF_ATOM,
+        FAST_BF16=_FAST_BF16_QUANT and x.dtype == torch.bfloat16,
         num_warps=4,
     )
     return BlockScaledOperand.from_parts(qdata, scale, MXFP8_E4M3, orig_dtype=x.dtype)
@@ -1876,7 +2045,9 @@ def quantize_mxfp8_gather_varlen_m(
                 "reverse_idx must match gather_idx as a contiguous CUDA int32 tensor"
             )
         if top_k <= 0 or physical_m * top_k != total:
-            raise ValueError("top_k must be positive and T * top_k must equal routed rows")
+            raise ValueError(
+                "top_k must be positive and T * top_k must equal routed rows"
+            )
         _physical_rowwise_route_sf_kernel[
             (triton.cdiv(physical_m, _GATHER_SF_BLOCK_M), k // _SF_ATOM)
         ](
@@ -1893,6 +2064,7 @@ def quantize_mxfp8_gather_varlen_m(
             N_SEARCH_ITERS=experts.bit_length(),
             BLOCK_M=_GATHER_SF_BLOCK_M,
             BLOCK_K=_SF_ATOM,
+            FAST_BF16=_FAST_BF16_QUANT and x.dtype == torch.bfloat16,
             num_warps=4,
         )
         return BlockScaledOperand.from_parts(
@@ -1923,11 +2095,10 @@ def quantize_mxfp8_gather_varlen_m(
         K=k,
         BLOCK_M=_VARLEN_BLOCK_M,
         BLOCK_K=_SF_ATOM,
-        num_warps=4,
+        FAST_BF16=_FAST_BF16_QUANT and x.dtype == torch.bfloat16,
+        num_warps=_PHYSICAL_ROW_NUM_WARPS,
     )
-    _gather_varlen_m_scale_kernel[
-        (triton.cdiv(total, _GATHER_SF_BLOCK_M), rk)
-    ](
+    _gather_varlen_m_scale_kernel[(triton.cdiv(total, _GATHER_SF_BLOCK_M), rk)](
         linear_scale,
         gather_idx,
         scale.view(torch.uint8),
@@ -1969,7 +2140,7 @@ def quantize_mxfp8_varlen_k(
         else scale_out
     )
     _check_outputs(qdata, scale, q_shape, sf_shape)
-    block_n = 64
+    block_n = _VARLEN_K_BLOCK_N
     _segmented_varlen_k_kernel[(padded_blocks, triton.cdiv(n, block_n))](
         x,
         gather_idx,
@@ -1983,7 +2154,8 @@ def quantize_mxfp8_varlen_k(
         HAS_GATHER=gather_idx is not None,
         N_SEARCH_ITERS=experts.bit_length(),
         BLOCK_N=block_n,
-        num_warps=4,
+        FAST_BF16=_FAST_BF16_QUANT and x.dtype == torch.bfloat16,
+        num_warps=_VARLEN_K_NUM_WARPS,
     )
     return BlockScaledOperand.from_parts(
         qdata,
@@ -2055,6 +2227,7 @@ def quantize_mxfp8_varlen_k_pair(
         RK=padded_rk,
         N_SEARCH_ITERS=experts.bit_length(),
         BLOCK_N=_VARLEN_K_PAIR_BLOCK_N,
+        FAST_BF16=_FAST_BF16_QUANT and x0.dtype == torch.bfloat16,
         num_warps=_VARLEN_K_PAIR_NUM_WARPS,
     )
     return (
@@ -2142,6 +2315,7 @@ def quantize_mxfp8_varlen_dual(
         HAS_GATHER=gather_idx is not None,
         N_SEARCH_ITERS=experts.bit_length(),
         BLOCK_N=_VARLEN_DUAL_BLOCK_N,
+        FAST_BF16=_FAST_BF16_QUANT and x.dtype == torch.bfloat16,
         num_warps=_VARLEN_DUAL_NUM_WARPS,
     )
     return (
@@ -2161,11 +2335,90 @@ def quantize_mxfp8_varlen_dual(
     )
 
 
+def quantize_mxfp8_varlen_iso32_dual(
+    x: torch.Tensor,
+    cu_seqlens: torch.Tensor,
+    *,
+    gather_idx: torch.Tensor | None = None,
+    qdata_out: torch.Tensor | None = None,
+    row_scale_out: torch.Tensor | None = None,
+    col_scale_out: torch.Tensor | None = None,
+) -> tuple[BlockScaledOperand, BlockScaledOperand]:
+    """Emit two MXFP8 layouts sharing one iso32-quantized value tensor.
+
+    Unlike standard OCP 1x32 MXFP8, every 32x32 expert-local block uses one
+    scale. This experimental representation is hardware-consumable but changes
+    quantization semantics, so callers must gate it explicitly.
+    """
+    experts, total = _validate(x, cu_seqlens, gather_idx)
+    n = x.shape[1]
+    if n % _SF_ATOM:
+        raise ValueError(f"N={n} must be divisible by {_SF_ATOM}")
+    padded_rm = (total + _SF_ATOM - 1) // _SF_ATOM + experts - 1
+    padded_blocks = padded_rm * (_SF_ATOM // _SF_VEC)
+    row_rk = n // _SF_ATOM
+    q_shape = (total, n)
+    row_sf_shape = (1, padded_rm, row_rk, 32, 4, 4)
+    col_sf_shape = (1, row_rk, padded_rm, 32, 4, 4)
+    qdata = (
+        torch.empty(q_shape, dtype=MXFP8_E4M3.qdata_dtype, device=x.device)
+        if qdata_out is None
+        else qdata_out
+    )
+    row_scale = (
+        torch.empty(row_sf_shape, dtype=MXFP8_E4M3.scale_dtype, device=x.device)
+        if row_scale_out is None
+        else row_scale_out
+    )
+    col_scale = (
+        torch.empty(col_sf_shape, dtype=MXFP8_E4M3.scale_dtype, device=x.device)
+        if col_scale_out is None
+        else col_scale_out
+    )
+    _check_outputs(qdata, row_scale, q_shape, row_sf_shape)
+    _check_outputs(qdata, col_scale, q_shape, col_sf_shape)
+
+    block_n = 128
+    _varlen_iso32_dual_kernel[(padded_blocks, n // block_n)](
+        x,
+        gather_idx,
+        qdata,
+        row_scale.view(torch.uint8),
+        col_scale.view(torch.uint8),
+        cu_seqlens,
+        N=n,
+        E=experts,
+        ROW_RK=row_rk,
+        COL_RK=padded_rm,
+        HAS_GATHER=gather_idx is not None,
+        N_SEARCH_ITERS=experts.bit_length(),
+        BLOCK_N=block_n,
+        FAST_BF16=_FAST_BF16_QUANT and x.dtype == torch.bfloat16,
+        num_warps=1,
+    )
+    return (
+        BlockScaledOperand.from_parts(
+            qdata,
+            row_scale,
+            MXFP8_E4M3,
+            orig_dtype=x.dtype,
+        ),
+        BlockScaledOperand.from_parts(
+            qdata,
+            col_scale,
+            MXFP8_E4M3,
+            orig_dtype=x.dtype,
+            quant_dim=-2,
+        ),
+    )
+
+
 __all__ = [
     "launch_sgd_update_and_quantize_mxfp8_weight",
     "launch_sgd_update_and_quantize_mxfp8_weight_dual",
     "quantize_mxfp8_gather_varlen_m",
     "quantize_mxfp8_varlen_dual",
+    "quantize_mxfp8_varlen_iso32_dual",
     "quantize_mxfp8_varlen_k",
     "quantize_mxfp8_varlen_k_pair",
     "quantize_mxfp8_varlen_m",

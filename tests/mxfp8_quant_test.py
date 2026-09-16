@@ -1,6 +1,8 @@
 # Copyright (c) 2026, SonicMoE contributors.
 """Numerical tests for routed and segmented MXFP8 quantization fusions."""
 
+import itertools
+
 import pytest
 import torch
 from quack.blockscaled import MXFP8_E4M3, BlockScaledOperand, unpack_scale_blocked_to_2d
@@ -13,7 +15,7 @@ from quack.blockscaled import (
 from quack.blockscaled import (
     quantize_mxfp8_varlen_m as quantize_mxfp8_varlen_m_ref,
 )
-
+from quack.blockscaled.quantize import _compute_e8m0_scale_rceil
 from sonicmoe.functional.triton_kernels import (
     TC_topk_router_metadata_triton,
     TC_topk_router_metadata_triton_workspace,
@@ -22,6 +24,7 @@ from sonicmoe.functional.triton_kernels import (
 from sonicmoe.functional.triton_kernels.mxfp8_quant import (
     quantize_mxfp8_gather_varlen_m,
     quantize_mxfp8_varlen_dual,
+    quantize_mxfp8_varlen_iso32_dual,
     quantize_mxfp8_varlen_k,
     quantize_mxfp8_varlen_k_pair,
     quantize_mxfp8_varlen_m,
@@ -165,6 +168,87 @@ def test_routed_varlen_dual_quantization_matches_separate_paths():
         _active_varlen_k_scales(actual_col, cu),
         _active_varlen_k_scales(expected_col, cu),
     )
+
+
+def test_fast_bf16_quantization_matches_quack_for_every_finite_value():
+    _skip_if_not_sm100()
+    bits = torch.arange(1 << 16, dtype=torch.int32)
+    bits = torch.where((bits & 0x7F80) != 0x7F80, bits, torch.zeros_like(bits))
+    x = bits.to(torch.uint16).view(torch.bfloat16).reshape(512, 128).cuda()
+    cu = torch.tensor([0, 257, 512], dtype=torch.int32, device="cuda")
+
+    expected_row = quantize_mxfp8_varlen_m_ref(x, cu)
+    expected_col = quantize_mxfp8_varlen_k_ref(x, cu)
+    actual_row, actual_col = quantize_mxfp8_varlen_dual(x, cu)
+
+    assert torch.equal(
+        actual_row.qdata.view(torch.uint8), expected_row.qdata.view(torch.uint8)
+    )
+    assert torch.equal(
+        actual_col.qdata.view(torch.uint8), expected_col.qdata.view(torch.uint8)
+    )
+    assert torch.equal(
+        _active_varlen_m_scales(actual_row, cu).view(torch.uint8),
+        _active_varlen_m_scales(expected_row, cu).view(torch.uint8),
+    )
+    assert torch.equal(
+        _active_varlen_k_scales(actual_col, cu),
+        _active_varlen_k_scales(expected_col, cu),
+    )
+
+
+def test_varlen_iso32_dual_quantization_shares_values_and_layouts():
+    _skip_if_not_sm100()
+    torch.manual_seed(27)
+    x = torch.randn(226, 256, dtype=torch.bfloat16, device="cuda")
+    cu = torch.tensor([0, 0, 33, 97, 97, 226], dtype=torch.int32, device="cuda")
+
+    rowwise, colwise = quantize_mxfp8_varlen_iso32_dual(x, cu)
+
+    assert rowwise.qdata.data_ptr() == colwise.qdata.data_ptr()
+    padded_rows = rowwise.scale.shape[1] * 128
+    row_scales = unpack_scale_blocked_to_2d(
+        rowwise.scale, padded_rows, x.shape[1] // 32
+    )[0].view(torch.uint8)
+    col_scales = unpack_scale_blocked_to_2d(
+        colwise.scale, x.shape[1], colwise.scale.shape[2] * 4
+    )[0].view(torch.uint8)
+    offsets = cu.tolist()
+    for expert, (start, end) in enumerate(itertools.pairwise(offsets)):
+        padded_start = (start // 128 + expert) * 128
+        for block_start in range(start, end, 32):
+            block_end = min(block_start + 32, end)
+            scale_column = padded_start // 32 + (block_start - start) // 32
+            for col_start in range(0, x.shape[1], 32):
+                tile = x[block_start:block_end, col_start : col_start + 32].float()
+                scale_byte = _compute_e8m0_scale_rceil(
+                    tile.abs().amax().reshape(1), 448.0
+                ).view(torch.uint8)
+                scale = (
+                    (torch.clamp(scale_byte.int(), min=1) << 23)
+                    .view(torch.float32)
+                    .item()
+                )
+                expected_q = torch.clamp(tile / scale, -448.0, 448.0).to(
+                    torch.float8_e4m3fn
+                )
+                assert torch.equal(
+                    rowwise.qdata[block_start:block_end, col_start : col_start + 32],
+                    expected_q,
+                )
+                row_group = col_start // 32
+                assert torch.all(
+                    row_scales[
+                        padded_start + block_start - start : padded_start
+                        + block_end
+                        - start,
+                        row_group,
+                    ]
+                    == scale_byte
+                )
+                assert torch.all(
+                    col_scales[col_start : col_start + 32, scale_column] == scale_byte
+                )
 
 
 def test_varlen_k_pair_quantization_matches_separate_paths():
