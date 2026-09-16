@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-16",
+  "gpu": "NVIDIA B200",
+  "world_size": 4,
+  "shape": {
+    "tokens_per_rank": 512,
+    "experts": 32,
+    "top_k": 4,
+    "hidden": 1024,
+    "intermediate": 1024
+  },
+  "mode": "training",
+  "scenario": "balanced",
+  "optimizer": "torch.optim.SGD",
+  "replicated_router_grad_sync": true,
+  "warmup": 10,
+  "repeats": 50,
+  "scope": "forward + backward + real bidirectional NCCL transport + averaged replicated-router all-reduce + SGD; maximum rank latency",
+  "mxfp8": {
+    "policy": "auto",
+    "runs": [
+      {"mean_ms": 5.070916481018067, "p50_ms": 5.042128086090088, "p95_ms": 5.110928106307983, "p99_ms": 5.794525890350341, "peak_mib": 412.7509765625},
+      {"mean_ms": 5.049487342834473, "p50_ms": 4.985231876373291, "p95_ms": 5.479937720298765, "p99_ms": 5.937313385009766, "peak_mib": 412.7509765625},
+      {"mean_ms": 5.048566417694092, "p50_ms": 4.971024036407471, "p95_ms": 5.529681563377379, "p99_ms": 6.171238436698913, "peak_mib": 412.7509765625}
+    ],
+    "mean_p50_ms": 4.99946133295695
+  },
+  "bf16": {
+    "runs": [
+      {"mean_ms": 4.855246095657349, "p50_ms": 4.777616024017334, "p95_ms": 5.51883521080017, "p99_ms": 5.878136672973632, "peak_mib": 219.51416015625},
+      {"mean_ms": 4.742380180358887, "p50_ms": 4.704671859741211, "p95_ms": 4.97114405632019, "p99_ms": 5.461841650009155, "peak_mib": 219.51416015625},
+      {"mean_ms": 4.790456352233886, "p50_ms": 4.670207977294922, "p95_ms": 5.81984658241272, "p99_ms": 5.9607867240905765, "peak_mib": 219.51416015625}
+    ],
+    "mean_p50_ms": 4.717498620351155
+  },
+  "bf16_over_mxfp8_per_run": [
+    0.9475395988446875,
+    0.9437217719075919,
+    0.9394860984558935
+  ],
+  "mean_speedup": 0.9435824897360576
+}

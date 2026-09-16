@@ -1,0 +1,30 @@
+{
+  "date": "2026-09-16",
+  "gpu": "NVIDIA B200",
+  "world_size": 4,
+  "shape": {
+    "tokens_per_rank": 256,
+    "experts": 32,
+    "top_k": 4,
+    "hidden": 1024,
+    "intermediate": 1024
+  },
+  "scenario": "single_hot",
+  "backend": "mxfp8",
+  "policy": "auto",
+  "mode": "training",
+  "optimizer": "torch.optim.SGD",
+  "replicated_router_grad_sync": true,
+  "warmup": 10,
+  "repeats": 200,
+  "empty_destination_ranks": 3,
+  "completed_without_deadlock": true,
+  "max_rank_latency": {
+    "mean_ms": 27.433687884807586,
+    "p50_ms": 4.974607944488525,
+    "p95_ms": 5.709928011894226,
+    "p99_ms": 1071.206632080076
+  },
+  "max_rank_peak_allocated_mib": 531.75,
+  "note": "The 200-iteration run completed with exact empty-rank gradients; rare host/runtime stalls dominate p99 and are retained rather than filtered."
+}

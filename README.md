@@ -137,6 +137,41 @@ Install the paired, commit-pinned Quack implementation with
 [the SM100 MXFP8 guide](docs/sm100_mxfp8_training.md) for the complete policy
 table, requirements, inference usage, validation, and benchmark results.
 
+### SM100 MXFP8 expert parallelism (EP4)
+
+The `feature/sm100-mxfp8-ep4` branch extends the frozen single-GPU branch with
+exact four-GPU expert sharding. It source-quantizes each token once, transports
+E4M3 values, E8M0 scales, local expert IDs, and router scores in one variable-
+split NCCL all-to-all, then performs the reverse all-to-all with exact autograd.
+
+```python
+import torch.distributed as dist
+from sonicmoe import ExpertParallelMoE, KernelBackendMoE
+
+dist.init_process_group("nccl")
+ep = ExpertParallelMoE(
+    num_experts=32,
+    num_experts_per_tok=4,
+    hidden_size=4096,
+    intermediate_size=4096,
+    activation_function=ActivationType.SWIGLU,
+    add_bias=False,
+    std=0.02,
+    expert_backend=KernelBackendMoE.sonicmoe_mxfp8,
+).cuda().to(torch.bfloat16)
+
+output, aux_loss = ep(local_tokens)
+(output.float().square().mean() + 0.01 * aux_loss.float()).backward()
+ep.all_reduce_replicated_gradients_(average=True)
+```
+
+Set `expert_backend=KernelBackendMoE.sonicmoe` for the all-BF16 EP reference.
+The route-pack/reduce and zero-material qdata policies are shape-adaptive and
+independently overridable; communication-stream overlap is available but off
+by default because it was slower on the measured B200/NVLink setup. See
+[the EP4 guide](docs/sm100_mxfp8_ep4.md) for launch commands, placement
+migration, optimizer rules, performance crossover, and known limitations.
+
 ## 🧪 Testing
 
 Run the test suite to verify correctness:
