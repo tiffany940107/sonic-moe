@@ -3,7 +3,6 @@
 
 import pytest
 import torch
-
 from sonicmoe.functional.triton_kernels import (
     TC_topk_router_metadata_switch_aux_triton_fused,
     TC_topk_router_metadata_triton_fused,
@@ -11,7 +10,10 @@ from sonicmoe.functional.triton_kernels import (
 )
 
 
-@pytest.mark.parametrize("tokens,experts,top_k", [(1024, 8, 2), (197, 16, 4)])
+@pytest.mark.parametrize(
+    "tokens,experts,top_k",
+    [(1024, 8, 2), (197, 16, 4), (8192, 8, 8)],
+)
 def test_fused_router_metadata_matches_stable_sort(tokens, experts, top_k):
     if torch.cuda.get_device_properties(0).major != 10:
         pytest.skip("SM100 required")

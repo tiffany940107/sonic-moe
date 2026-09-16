@@ -65,13 +65,22 @@ def _router_linear_topk_kernel(
         mask=output_mask,
     )
 
-    work = tl.where(expert[None, :] < E, logits, -float("inf"))
+    # Keep the selection domain restricted to real experts even when training
+    # has produced NaN/Inf router logits. ``argmax`` may otherwise select a
+    # padded BLOCK_E lane, which later becomes an out-of-range metadata index.
+    # Rank NaNs like PyTorch topk's high-valued NaN handling and clamp infinities
+    # to finite sentinels so every available real lane outranks masked lanes.
+    float_max: tl.constexpr = 3.4028234663852886e38
+    rank_logits = tl.where(logits != logits, float_max, logits)  # noqa: PLR0124
+    rank_logits = tl.maximum(tl.minimum(rank_logits, float_max), -float_max)
+    available = expert[None, :] < E
     slots = tl.arange(0, BLOCK_K)
     selected_values = tl.full((BLOCK_M, BLOCK_K), -float("inf"), tl.float32)
     selected_indices = tl.zeros((BLOCK_M, BLOCK_K), tl.int32)
     for slot in tl.static_range(K):
-        value = tl.max(work, axis=1)
+        work = tl.where(available, rank_logits, -float("inf"))
         index = tl.argmax(work, axis=1, tie_break_left=True)
+        value = tl.sum(tl.where(expert[None, :] == index[:, None], logits, 0.0), axis=1)
         selected_values = tl.where(
             slots[None, :] == slot,
             value[:, None],
@@ -82,7 +91,7 @@ def _router_linear_topk_kernel(
             index[:, None],
             selected_indices,
         )
-        work = tl.where(expert[None, :] == index[:, None], -float("inf"), work)
+        available &= expert[None, :] != index[:, None]
 
     selected_values -= tl.max(selected_values, axis=1)[:, None]
     numerator = tl.exp(selected_values)

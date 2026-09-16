@@ -4,7 +4,6 @@
 import pytest
 import torch
 import torch.nn.functional as F
-
 from sonicmoe.functional.router_aux import mxfp8_switch_aux_loss
 from sonicmoe.functional.router_mxfp8 import (
     mxfp8_router_attach_switch_aux,
@@ -61,6 +60,22 @@ def test_mxfp8_router_linear_topk_matches_pytorch(top_k):
     )
     for actual, expected in zip(grads_actual, grads_ref):
         torch.testing.assert_close(actual, expected, rtol=3e-2, atol=0.5)
+
+
+def test_mxfp8_router_topk_indices_stay_in_range_for_nonfinite_logits():
+    if torch.cuda.get_device_properties(0).major != 10:
+        pytest.skip("SM100 required")
+    x = torch.full((129, 128), float("nan"), dtype=torch.bfloat16, device="cuda")
+    weight = torch.randn(8, 128, dtype=torch.bfloat16, device="cuda")
+
+    _, _, indices = mxfp8_router_linear_topk(x, weight, 8)
+
+    assert indices.min() >= 0
+    assert indices.max() < weight.shape[0]
+    assert torch.equal(
+        torch.sort(indices, dim=-1).values,
+        torch.arange(8, device="cuda", dtype=torch.int32).expand_as(indices),
+    )
 
 
 def test_mxfp8_router_combines_score_and_switch_loss_backward():
