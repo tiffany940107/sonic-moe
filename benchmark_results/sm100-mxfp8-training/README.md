@@ -52,6 +52,45 @@ quantization/training cases and 20 targeted Quack block-scaled varlen/gather
 cases pass with compilation caches disabled. The Quack set exercises ordinary
 and fused-epilogue GEMMs with both cp.async and TMA gather.
 
+## SuperSonic-scope experimental frontier (2026-09-15)
+
+The fixed comparison is public `PFCCLab/supersonic-moe@76b4f4f`, shape
+`T=8192,E=8,K=8,H=3072,I=1536`. Both sides include already-dispatched route
+metadata, local expert forward/backward, input and router-score gradients, and
+FP32 expert-wgrad accumulation. Router projection/top-k, auxiliary loss,
+optimizer, and communication are excluded. Both use nsys merged GPU busy time
+inside a 12-iteration `BENCH` range.
+
+| Implementation | B200 SMs | GPU projection | Peak allocated |
+|---|---:|---:|---:|
+| Public fixed-commit recorded result | 148 | 2659.8 us | not reported here |
+| This branch, experimental flags | 148 | 2629.3 us | 3466 MiB |
+
+The measured lead over the public recorded value is about `1.15%`. Three
+fresh-process CUDA-event p50s were `2629.95`, `2631.84`, and `2630.98 us`.
+The profile is `profiles/s7_supersonic_scope_faster_experimental.nsys-rep` in
+the paired workspace.
+
+This is not the standard OCP correctness mode. It explicitly enables iso32
+for all dual activation casts and a finite-BF16-only fast RCEIL conversion:
+
+```bash
+SONICMOE_MXFP8_DZ_ISO32=1 \
+SONICMOE_MXFP8_ALL_ISO32=1 \
+SONICMOE_MXFP8_FAST_BF16_QUANT=1 \
+SONICMOE_MXFP8_VARLEN_K_BLOCK_N=128 \
+SONICMOE_MXFP8_VARLEN_K_WARPS=1 \
+SONICMOE_MXFP8_FC1_CLUSTER_M=2 \
+python benchmarks/benchmark_sm100_supersonic_scope.py \
+  --warmup 8 --iterations 12
+```
+
+All flags default off or to their conservative launch values. The public
+program was not re-executed locally because its Paddle Torch-proxy runtime is
+not present in the NGC container; the comparison value comes from the fixed
+commit's authoritative `HANDOFF.md`. See the training guide for the numerical
+caveats and exact scope.
+
 ## Optimized training acceptance result (2026-09-08)
 
 The accepted eager training step includes forward, backward, switch auxiliary

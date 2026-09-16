@@ -110,7 +110,12 @@ precision, not the mainloop precision selected by the policy.
 
 `SONICMOE_MXFP8_FP8_C_FUSE_DQUANT=1` additionally makes full-MXFP8 DGated
 emit the rowwise MXFP8 dpreactivation used by FC1 dgrad. Its default is `0`
-while register pressure and the shape crossover are being characterized.
+because the measured tradeoff depends on launch overhead. At
+`T=1024, E=8, top-k=2, H=I=2048` it reduced eager full-step latency by about
+4%, but increased CUDA-Graph full-step latency by about 1.9%. Nsight Compute
+also measured 218 registers per thread for the fused DGated kernel versus 203
+for the unfused kernel. Leave it at `0` for graph execution; eager users can
+force `1` and validate their own shape.
 
 Saved E4M3 values and their scales are invocation-owned, rather than reusable
 workspace tensors. This supports two live forwards before backward and avoids
@@ -200,6 +205,84 @@ with torch.inference_mode():
 `MoE.eval()` also selects the inference form. Calling backward after explicitly
 requesting inference mode is an error.
 
+### Experimental FP32 expert-gradient accumulation
+
+Full-MXFP8 training with `Mxfp8SGD` can write the two expert weight gradients
+directly into persistent FP32 buffers. The first backward in an accumulation
+window overwrites each buffer; later backwards use Quack's TMA reduce-add GEMM.
+This avoids materializing BF16 `Parameter.grad` tensors for the expert weights.
+Router and bias gradients continue to use normal PyTorch accumulation.
+
+Select the behavior before constructing `Mxfp8SGD`:
+
+| `SONICMOE_MXFP8_TMA_WGRAD` | Behavior |
+|---|---|
+| `auto` (default) | Disabled; keep ordinary BF16 expert `Parameter.grad` tensors |
+| `0` | Disabled explicitly |
+| `1` | Enable persistent FP32 expert gradients and TMA reduce-add |
+
+The equivalent programmatic override is
+`Mxfp8SGD(moe, use_fp32_wgrad_accum=True)`. It requires
+`SONICMOE_MXFP8_POLICY=mxfp8`; the default mixed policy has BF16 wgrad GEMMs and
+rejects the option. While enabled, `moe.c_fc.weight.grad` and
+`moe.c_proj.weight.grad` intentionally remain `None`; `Mxfp8SGD.step()` reads
+the workspace-owned FP32 tensors instead. Both `optimizer.zero_grad()` and
+`moe.zero_grad()` start a new logical accumulation window without clearing the
+backing storage.
+
+This path is opt-in because it is not currently a speed default. On B200 at
+`T=1024, E=8, top-k=2, H=I=2048`, four accumulated microbatches plus one
+optimizer step were about 5.4% slower and used about 192 MiB more peak allocated
+memory than ordinary BF16 expert gradients. The feature is retained for exact
+SuperSonic-style FP32 accumulation comparisons and for future shape-specific
+optimization.
+
+### Experimental SuperSonic-scope performance mode
+
+The standard `mxfp8` policy keeps OCP 1x32 scaling and remains the correctness
+default. A separate, explicit research configuration targets the public
+SuperSonic-MoE local-expert benchmark. It changes quantization granularity and
+must not be enabled silently in a training run:
+
+```bash
+export SONICMOE_MXFP8_DZ_ISO32=1
+export SONICMOE_MXFP8_ALL_ISO32=1
+export SONICMOE_MXFP8_FAST_BF16_QUANT=1
+export SONICMOE_MXFP8_VARLEN_K_BLOCK_N=128
+export SONICMOE_MXFP8_VARLEN_K_WARPS=1
+export SONICMOE_MXFP8_FC1_CLUSTER_M=2
+```
+
+`SONICMOE_MXFP8_ALL_ISO32=1` makes the x, dout, and dpreactivation dual casts
+share one FP8 value tensor and two scale layouts per 32x32 block. This is
+hardware-consumable MXFP8, but it is not mathematically identical to OCP 1x32
+scaling. `SONICMOE_MXFP8_DZ_ISO32=1` enables only the dpreactivation form when
+`ALL_ISO32` is off. Both default to `0`.
+
+`SONICMOE_MXFP8_FAST_BF16_QUANT=1` replaces floating-point division and clamps
+with a BF16 exponent-bit RCEIL conversion and reciprocal power-of-two multiply.
+It is byte-identical to Quack for every finite BF16 value, which is covered by
+an exhaustive 65,536-pattern test. It defaults to `0` because non-finite blocks
+retain the conservative reference path only when the flag is off. The two
+varlen-K settings and FC1 cluster setting are shape-specific launch controls;
+their defaults remain `64`, `4`, and `1` respectively.
+
+On an NVIDIA B200 with 148 SMs, shape
+`T=8192,E=8,K=8,H=3072,I=1536`, and the same nsys merged GPU-projection method
+used by public `PFCCLab/supersonic-moe@76b4f4f`, this configuration measured
+`2629.3 us` per forward+backward iteration. Three fresh-process CUDA-event p50s
+were `2629.95`, `2631.84`, and `2630.98 us`. The fixed public commit records
+`2659.8 us`, so the measured lead is about 1.15%. Peak allocated memory was
+about 3466 MiB.
+
+The comparison uses the same GPU class/SM count, shape, local-expert scope, hot
+weight cache, FP32 wgrad accumulation, iteration count, and GPU-projection
+calculation. The public program itself was not re-executed in this container
+because it requires its Paddle Torch-proxy runtime, which is not installed;
+`2659.8 us` is therefore the fixed commit's recorded result, not a new local
+measurement. Treat this mode as an experimental performance frontier until a
+long-run convergence audit is available.
+
 ## Implementation notes
 
 - Routed gather and rowwise MXFP8 quantization are fused, and scales are written
@@ -245,6 +328,7 @@ the official BF16 Sonic backend and this MXFP8 backend:
 ```bash
 python benchmarks/benchmark_sm100_mxfp8.py \
   --mode training --optimizer-step \
+  --grad-accum-steps 1 --tma-wgrad auto \
   --tokens 1024 --experts 8 --top-k 2 \
   --hidden 2048 --intermediate 2048 \
   --mxfp8-policy auto \
@@ -256,6 +340,12 @@ Add `--save-z-fp8 1 --fp8-c-dgated 1` to force the FP8 saved-activation
 chain, or pass both as `0` for the BF16-C A/B baseline. For full-MXFP8, add
 `--fp8-c-fuse-dquant 1` to measure the heavier fused backward epilogue. The
 JSON output records all three resolved settings.
+
+Use `--grad-accum-steps N` to time `N` forward/backward microbatches before
+the optional optimizer step. With `--mxfp8-policy mxfp8` and the fused SGD
+backend, `--tma-wgrad 1` forces the experimental FP32/TMA accumulator;
+`--tma-wgrad 0` is its BF16-`Parameter.grad` A/B baseline. The default
+`--tma-wgrad auto` is currently equivalent to `0`.
 
 Replace `--mxfp8-policy auto` with `--mxfp8-policy mxfp8` to benchmark
 full-MXFP8 backward. The BF16 comparison is selected independently by the
@@ -273,3 +363,21 @@ python benchmarks/benchmark_mxfp8_gather.py \
 
 Recorded results and the exact environment are in
 `benchmark_results/sm100-mxfp8-training/README.md`.
+
+For the fixed SuperSonic local-expert scope, run:
+
+```bash
+SONICMOE_MXFP8_DZ_ISO32=1 \
+SONICMOE_MXFP8_ALL_ISO32=1 \
+SONICMOE_MXFP8_FAST_BF16_QUANT=1 \
+SONICMOE_MXFP8_VARLEN_K_BLOCK_N=128 \
+SONICMOE_MXFP8_VARLEN_K_WARPS=1 \
+SONICMOE_MXFP8_FC1_CLUSTER_M=2 \
+python benchmarks/benchmark_sm100_supersonic_scope.py \
+  --warmup 8 --iterations 12
+```
+
+The benchmark starts from fixed dispatched routes and includes metadata,
+expert forward/backward, input and router-score gradients, and expert wgrad.
+It excludes router projection/top-k, auxiliary loss, optimizer, and
+communication. Its JSON output records the resolved experimental settings.

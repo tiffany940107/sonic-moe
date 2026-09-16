@@ -117,6 +117,21 @@ BF16 saved-activation fallback. Set both to `1` to evaluate the same chain
 with the default BF16-backward `auto` policy. These switches are also
 import-time settings.
 
+For full `mxfp8` plus `Mxfp8SGD`,
+`SONICMOE_MXFP8_TMA_WGRAD=1` enables the experimental persistent FP32 expert
+gradient and TMA reduce-add path. `auto` and `0` keep ordinary BF16 expert
+`.grad` tensors; `auto` is intentionally disabled because the measured B200
+gradient-accumulation case was slower and used more memory. See the guide for
+the accumulation lifecycle and benchmark flags.
+
+An additional opt-in research configuration reaches `2629.3 us` nsys GPU
+projection on B200 for the public SuperSonic reference shape
+`T=8192,E=8,K=8,H=3072,I=1536`, versus the fixed public commit's recorded
+`2659.8 us`. It uses non-standard iso32 scale sharing and a finite-input fast
+quantizer, so it does not change the default `auto` or standard `mxfp8`
+semantics. The exact flags, scope, reproducibility caveat, and convergence risk
+are documented in the guide's experimental performance section.
+
 Install the paired, commit-pinned Quack implementation with
 `requirements-sm100-mxfp8.txt`. See
 [the SM100 MXFP8 guide](docs/sm100_mxfp8_training.md) for the complete policy
