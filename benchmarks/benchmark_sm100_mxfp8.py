@@ -33,6 +33,7 @@ def _run_step(
     grad: torch.Tensor,
     backend: KernelBackendMoE,
     mode: str,
+    grad_accum_steps: int,
     optimizer: torch.optim.Optimizer | None,
 ) -> None:
     if mode == "forward":
@@ -41,9 +42,10 @@ def _run_step(
     else:
         model.zero_grad(set_to_none=True)
         x.grad = None
-        output, aux_loss = model(x, kernel_backend_moe=backend)
-        loss = (output * grad).sum() + 0.01 * aux_loss
-        loss.backward()
+        for _ in range(grad_accum_steps):
+            output, aux_loss = model(x, kernel_backend_moe=backend)
+            loss = (output * grad).sum() + 0.01 * aux_loss
+            loss.backward()
         if optimizer is not None:
             optimizer.step()
 
@@ -66,6 +68,7 @@ def _capture_step(
     grad: torch.Tensor,
     backend: KernelBackendMoE,
     mode: str,
+    grad_accum_steps: int,
     optimizer: torch.optim.Optimizer | None,
 ) -> tuple[Callable[[], None], torch.cuda.CUDAGraph]:
     """Capture one fixed-shape step after eager warmup has allocated grads."""
@@ -73,7 +76,7 @@ def _capture_step(
     capture_stream = torch.cuda.Stream()
     capture_stream.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(capture_stream):
-        _run_step(model, x, grad, backend, mode, optimizer)
+        _run_step(model, x, grad, backend, mode, grad_accum_steps, optimizer)
     capture_stream.synchronize()
     # The benchmark intentionally warms eager autograd on the default stream
     # before capturing on a side stream.  Tell autograd to rebind those stale
@@ -88,9 +91,10 @@ def _capture_step(
                 model.zero_grad(set_to_none=False)
                 if x.grad is not None:
                     x.grad.zero_()
-                output, aux_loss = model(x, kernel_backend_moe=backend)
-                loss = (output * grad).sum() + 0.01 * aux_loss
-                loss.backward()
+                for _ in range(grad_accum_steps):
+                    output, aux_loss = model(x, kernel_backend_moe=backend)
+                    loss = (output * grad).sum() + 0.01 * aux_loss
+                    loss.backward()
                 if optimizer is not None:
                     optimizer.step()
     finally:
@@ -107,6 +111,7 @@ def _measure(
     optimizer_step: bool,
     fused_mxfp8_sgd: bool,
     cuda_graph: bool,
+    grad_accum_steps: int,
     warmup: int,
     repeats: int,
 ) -> dict[str, float]:
@@ -122,7 +127,7 @@ def _measure(
     )
 
     def eager_run():
-        _run_step(model, x, grad, backend, mode, optimizer)
+        _run_step(model, x, grad, backend, mode, grad_accum_steps, optimizer)
 
     for _ in range(warmup):
         eager_run()
@@ -130,7 +135,9 @@ def _measure(
 
     _graph = None
     if cuda_graph:
-        run, _graph = _capture_step(model, x, grad, backend, mode, optimizer)
+        run, _graph = _capture_step(
+            model, x, grad, backend, mode, grad_accum_steps, optimizer
+        )
     else:
         run = eager_run
 
@@ -159,6 +166,7 @@ def _measure_interleaved(
     optimizer_step: bool,
     fused_mxfp8_sgd: bool,
     cuda_graph: bool,
+    grad_accum_steps: int,
     warmup: int,
     repeats: int,
 ) -> dict[str, dict[str, float | None]]:
@@ -202,6 +210,7 @@ def _measure_interleaved(
                 grad,
                 backends[name],
                 mode,
+                grad_accum_steps,
                 optimizers[name],
             )
     torch.cuda.synchronize()
@@ -216,13 +225,20 @@ def _measure_interleaved(
                 grad,
                 backends[name],
                 mode,
+                grad_accum_steps,
                 optimizers[name],
             )
     else:
         runners = {
             name: (
                 lambda n=name: _run_step(
-                    models[n], inputs[n], grad, backends[n], mode, optimizers[n]
+                    models[n],
+                    inputs[n],
+                    grad,
+                    backends[n],
+                    mode,
+                    grad_accum_steps,
+                    optimizers[n],
                 )
             )
             for name in names
@@ -269,6 +285,12 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=1,
+        help="backward microbatches accumulated before the optional optimizer step",
+    )
+    parser.add_argument(
         "--cuda-graph",
         action="store_true",
         help="capture and replay each fixed-shape step after eager warmup",
@@ -302,6 +324,7 @@ def main() -> None:
     parser.add_argument("--save-z-fp8", choices=("auto", "0", "1"))
     parser.add_argument("--fp8-c-dgated", choices=("auto", "0", "1"))
     parser.add_argument("--fp8-c-fuse-dquant", choices=("0", "1"))
+    parser.add_argument("--tma-wgrad", choices=("auto", "0", "1"))
     parser.add_argument(
         "--backends",
         nargs="+",
@@ -315,6 +338,10 @@ def main() -> None:
     args = parser.parse_args()
     if torch.cuda.get_device_properties(0).major != 10:
         raise RuntimeError("this benchmark requires SM100")
+    if args.grad_accum_steps < 1:
+        parser.error("--grad-accum-steps must be positive")
+    if args.mode == "forward" and args.grad_accum_steps != 1:
+        parser.error("--grad-accum-steps only applies to training mode")
     if (
         args.fused_mxfp8_sgd or "sonicmoe_mxfp8_fused_sgd" in args.backends
     ) and not args.optimizer_step:
@@ -331,6 +358,8 @@ def main() -> None:
         mxfp8_impl._FP8_C_DGATED = args.fp8_c_dgated
     if args.fp8_c_fuse_dquant is not None:
         mxfp8_impl._FP8_C_FUSE_DQUANT = args.fp8_c_fuse_dquant == "1"
+    if args.tma_wgrad is not None:
+        os.environ["SONICMOE_MXFP8_TMA_WGRAD"] = args.tma_wgrad
     torch.manual_seed(123)
     base = (
         MoE(
@@ -362,6 +391,7 @@ def main() -> None:
             args.optimizer_step,
             args.fused_mxfp8_sgd,
             args.cuda_graph,
+            args.grad_accum_steps,
             args.warmup,
             args.repeats,
         )
@@ -384,6 +414,7 @@ def main() -> None:
                 args.optimizer_step,
                 args.fused_mxfp8_sgd or fused_variant,
                 args.cuda_graph,
+                args.grad_accum_steps,
                 args.warmup,
                 args.repeats,
             )
@@ -410,6 +441,8 @@ def main() -> None:
             "fp8_c_dgated": mxfp8_impl._FP8_C_DGATED,
             "fp8_c_fuse_dquant": mxfp8_impl._FP8_C_FUSE_DQUANT,
         },
+        "mxfp8_tma_wgrad": os.environ.get("SONICMOE_MXFP8_TMA_WGRAD", "auto"),
+        "grad_accum_steps": args.grad_accum_steps,
         "warmup": args.warmup,
         "repeats": args.repeats,
         "results": results,

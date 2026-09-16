@@ -329,6 +329,81 @@ def test_sm100_mxfp8_fused_sgd_matches_standard_sgd(training_policy):
             assert torch.equal(actual_parameter, expected_parameter)
 
 
+def test_sm100_mxfp8_fp32_wgrad_accumulates_and_resets():
+    if torch.cuda.get_device_properties(0).major != 10:
+        pytest.skip("the single-GPU MXFP8 training backend targets SM100")
+    torch.manual_seed(15)
+    standard = (
+        MoE(
+            num_experts=4,
+            num_experts_per_tok=2,
+            hidden_size=128,
+            intermediate_size=128,
+            activation_function=ActivationType.SWIGLU,
+            add_bias=False,
+            std=0.02,
+        )
+        .cuda()
+        .to(torch.bfloat16)
+    )
+    accumulated = copy.deepcopy(standard)
+    standard._mxfp8_workspace = Mxfp8Workspace(training_policy=Mxfp8TrainingPolicy())
+    accumulated._mxfp8_workspace = Mxfp8Workspace(training_policy=Mxfp8TrainingPolicy())
+    optimizer = Mxfp8SGD(
+        accumulated,
+        lr=0.01,
+        use_fp32_wgrad_accum=True,
+    )
+    standard.zero_grad(set_to_none=True)
+    optimizer.zero_grad(set_to_none=True)
+
+    for _ in range(2):
+        x = torch.randn(64, 128, device="cuda", dtype=torch.bfloat16)
+        grad_out = torch.randn_like(x)
+        expected = standard(x, kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8)[0]
+        actual = accumulated(x, kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8)[0]
+        assert torch.equal(actual, expected)
+        expected.backward(grad_out)
+        actual.backward(grad_out)
+
+    assert accumulated.c_fc.weight.grad is None
+    assert accumulated.c_proj.weight.grad is None
+    for name, expected in (
+        ("w1", standard.c_fc.weight.grad),
+        ("w2", standard.c_proj.weight.grad),
+    ):
+        actual = accumulated._mxfp8_workspace.fp32_wgrad(name)
+        assert actual is not None and actual.dtype == torch.float32
+        assert actual.is_contiguous() and tuple(actual.shape) == tuple(expected.shape)
+        assert _relative_l2(actual, expected.float()) < 0.01
+
+    accumulated.zero_grad(set_to_none=True)
+    assert accumulated._mxfp8_workspace.fp32_wgrad("w1") is None
+    assert accumulated._mxfp8_workspace.fp32_wgrad("w2") is None
+
+
+def test_sm100_mxfp8_fp32_wgrad_rejects_forward_only_policy():
+    model = MoE(
+        num_experts=4,
+        num_experts_per_tok=2,
+        hidden_size=128,
+        intermediate_size=128,
+        activation_function=ActivationType.SWIGLU,
+        add_bias=False,
+        std=0.02,
+    )
+    model._mxfp8_workspace = Mxfp8Workspace(
+        training_policy=Mxfp8TrainingPolicy(
+            fc1_dgrad="bf16",
+            fc2_dgrad="bf16",
+            fc1_wgrad="bf16",
+            fc2_wgrad="bf16",
+        )
+    )
+    with pytest.raises(RuntimeError, match="requires the full mxfp8 policy"):
+        Mxfp8SGD(model, use_fp32_wgrad_accum=True)
+
+
 @pytest.mark.parametrize(
     "training_policy",
     [

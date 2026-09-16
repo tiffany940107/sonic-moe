@@ -27,7 +27,7 @@ from quack.epilogue.library import (
     gated_preact_quant_mod,
     gated_quant_mod,
 )
-from quack.gemm_interface import gemm, gemm_dact
+from quack.gemm_interface import gemm, gemm_add_inplace, gemm_dact
 
 from ..enums import ActivationType, is_glu
 from .backward import _token_broadcast_backward
@@ -37,6 +37,7 @@ from .triton_kernels.mxfp8_quant import (
     launch_sgd_update_and_quantize_mxfp8_weight_dual,
     quantize_mxfp8_gather_varlen_m,
     quantize_mxfp8_varlen_dual,
+    quantize_mxfp8_varlen_iso32_dual,
     quantize_mxfp8_varlen_k,
     quantize_mxfp8_varlen_k_pair,
     quantize_mxfp8_varlen_m,
@@ -56,6 +57,12 @@ _FC1_TMA_GATHER = os.environ.get("SONICMOE_MXFP8_FC1_TMA_GATHER", "1") == "1"
 _FUSE_DGATED_QUANT = os.environ.get("SONICMOE_MXFP8_FUSE_DGATED_QUANT", "1") == "1"
 _FUSE_VARLEN_DUAL = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_DUAL", "1") == "1"
 _FUSE_VARLEN_K_PAIR = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_K_PAIR", "1") == "1"
+_DZ_ISO32 = os.environ.get("SONICMOE_MXFP8_DZ_ISO32", "0")
+if _DZ_ISO32 not in ("0", "1"):
+    raise ValueError("SONICMOE_MXFP8_DZ_ISO32 must be 0 or 1")
+_ALL_ISO32 = os.environ.get("SONICMOE_MXFP8_ALL_ISO32", "0")
+if _ALL_ISO32 not in ("0", "1"):
+    raise ValueError("SONICMOE_MXFP8_ALL_ISO32 must be 0 or 1")
 
 
 def _tristate_env(name: str, default: str = "auto") -> str:
@@ -71,6 +78,9 @@ _FP8_C_FUSE_DQUANT = os.environ.get("SONICMOE_MXFP8_FP8_C_FUSE_DQUANT", "0") == 
 _ZERO_MATERIAL_GATHER = os.environ.get("SONICMOE_MXFP8_ZERO_MATERIAL_GATHER", "auto")
 if _ZERO_MATERIAL_GATHER not in ("auto", "0", "1"):
     raise ValueError("SONICMOE_MXFP8_ZERO_MATERIAL_GATHER must be auto, 0, or 1")
+_ROUTE_SF_PATH = os.environ.get("SONICMOE_MXFP8_ROUTE_SF_PATH", "scatter")
+if _ROUTE_SF_PATH not in ("scatter", "split"):
+    raise ValueError("SONICMOE_MXFP8_ROUTE_SF_PATH must be scatter or split")
 
 
 def _use_zero_material_gather(top_k: int) -> bool:
@@ -124,6 +134,12 @@ class _WeightPairCacheEntry:
     operands: tuple[BlockScaledOperand, BlockScaledOperand]
 
 
+@dataclass
+class _WgradAccumulatorEntry:
+    tensor: torch.Tensor
+    has_value: bool = False
+
+
 def _default_training_policy() -> Mxfp8TrainingPolicy:
     mode = os.environ.get(
         "SONICMOE_MXFP8_POLICY",
@@ -175,6 +191,9 @@ class Mxfp8Workspace:
         self._scratch: dict[tuple[int, int, str], torch.Tensor] = {}
         self._weights: dict[tuple[int, int, str], _WeightCacheEntry] = {}
         self._weight_pairs: dict[tuple[int, int, str], _WeightPairCacheEntry] = {}
+        self._fp32_wgrad_enabled = False
+        self._fp32_wgrad_stream_key: tuple[int, int] | None = None
+        self._fp32_wgrads: dict[str, _WgradAccumulatorEntry] = {}
 
     @staticmethod
     def _stream_key(
@@ -211,6 +230,64 @@ class Mxfp8Workspace:
             value = torch.empty(shape, dtype=dtype, device=device)
             self._scratch[key] = value
         return value
+
+    @property
+    def fp32_wgrad_enabled(self) -> bool:
+        return self._fp32_wgrad_enabled
+
+    def enable_fp32_wgrad_accumulation(self, *, stream_key: tuple[int, int]) -> None:
+        """Route both expert wgrads into module-owned FP32 accumulators."""
+        if (
+            self.training_policy.fc1_wgrad != "mxfp8"
+            or self.training_policy.fc2_wgrad != "mxfp8"
+        ):
+            raise RuntimeError("FP32 TMA wgrad accumulation requires both MXFP8 wgrads")
+        if (
+            self._fp32_wgrad_stream_key is not None
+            and self._fp32_wgrad_stream_key != stream_key
+        ):
+            raise RuntimeError(
+                "FP32 wgrad accumulation is already bound to another stream"
+            )
+        self._fp32_wgrad_stream_key = stream_key
+        self._fp32_wgrad_enabled = True
+
+    def reset_fp32_wgrad_accumulation(self) -> None:
+        """Start a new accumulation window without clearing the backing storage."""
+        for entry in self._fp32_wgrads.values():
+            entry.has_value = False
+
+    def fp32_wgrad(self, name: str) -> torch.Tensor | None:
+        entry = self._fp32_wgrads.get(name)
+        return entry.tensor if entry is not None and entry.has_value else None
+
+    def _fp32_wgrad_target(
+        self,
+        name: str,
+        shape: tuple[int, ...],
+        device: torch.device,
+        stream_key: tuple[int, int],
+    ) -> tuple[torch.Tensor, bool]:
+        if not self._fp32_wgrad_enabled:
+            raise RuntimeError("FP32 wgrad accumulation has not been enabled")
+        if stream_key != self._fp32_wgrad_stream_key:
+            raise RuntimeError(
+                "FP32 wgrad accumulation must run on its registered stream"
+            )
+        entry = self._fp32_wgrads.get(name)
+        if (
+            entry is None
+            or tuple(entry.tensor.shape) != shape
+            or entry.tensor.device != device
+        ):
+            entry = _WgradAccumulatorEntry(
+                torch.empty(shape, dtype=torch.float32, device=device)
+            )
+            self._fp32_wgrads[name] = entry
+        return entry.tensor, entry.has_value
+
+    def _mark_fp32_wgrad(self, name: str) -> None:
+        self._fp32_wgrads[name].has_value = True
 
     def quantize_weight(
         self,
@@ -516,6 +593,7 @@ class Mxfp8Workspace:
         self._scratch.clear()
         self._weights.clear()
         self._weight_pairs.clear()
+        self._fp32_wgrads.clear()
 
 
 def _require_supported(
@@ -596,9 +674,10 @@ def _quantize_varlen_m(
         stream_key=stream_key,
     )
     if use_gather_operand:
+        use_scatter = _ROUTE_SF_PATH == "scatter"
         linear_scale = (
             None
-            if reverse_idx is not None
+            if use_scatter
             else workspace.tensor(
                 f"{name}.linear_sf",
                 (x.shape[0], x.shape[1] // MXFP8_E4M3.sf_vec_size),
@@ -611,8 +690,8 @@ def _quantize_varlen_m(
             x,
             expert_offsets,
             gather_idx,
-            reverse_idx=reverse_idx,
-            top_k=top_k,
+            reverse_idx=reverse_idx if use_scatter else None,
+            top_k=top_k if use_scatter else None,
             qdata_out=qdata,
             scale_out=scale,
             linear_scale_out=linear_scale,
@@ -770,6 +849,60 @@ def _quantize_varlen_dual(
     )
 
 
+def _quantize_varlen_iso32_dual(
+    workspace: Mxfp8Workspace,
+    name: str,
+    x: torch.Tensor,
+    expert_offsets: torch.Tensor,
+    *,
+    gather_idx: torch.Tensor | None = None,
+    invocation_owned_col: bool = False,
+    stream_key: tuple[int, int] | None = None,
+) -> tuple[BlockScaledOperand, BlockScaledOperand]:
+    total_m = x.shape[0] if gather_idx is None else gather_idx.numel()
+    n = x.shape[1]
+    experts = expert_offsets.numel() - 1
+    q_shape = (total_m, n)
+    qdata = (
+        torch.empty(q_shape, dtype=MXFP8_E4M3.qdata_dtype, device=x.device)
+        if invocation_owned_col
+        else workspace.tensor(
+            f"{name}.q",
+            q_shape,
+            MXFP8_E4M3.qdata_dtype,
+            x.device,
+            stream_key=stream_key,
+        )
+    )
+    row_scale = workspace.tensor(
+        f"{name}.row.sf",
+        _varlen_m_scale_shape(total_m, n, experts),
+        MXFP8_E4M3.scale_dtype,
+        x.device,
+        stream_key=stream_key,
+    )
+    col_scale_shape = _varlen_k_scale_shape(total_m, n, experts)
+    col_scale = (
+        torch.empty(col_scale_shape, dtype=MXFP8_E4M3.scale_dtype, device=x.device)
+        if invocation_owned_col
+        else workspace.tensor(
+            f"{name}.col.sf",
+            col_scale_shape,
+            MXFP8_E4M3.scale_dtype,
+            x.device,
+            stream_key=stream_key,
+        )
+    )
+    return quantize_mxfp8_varlen_iso32_dual(
+        x,
+        expert_offsets,
+        gather_idx=gather_idx,
+        qdata_out=qdata,
+        row_scale_out=row_scale,
+        col_scale_out=col_scale,
+    )
+
+
 def _expert_ids(expert_offsets: torch.Tensor, total_m: int) -> torch.Tensor:
     counts = expert_offsets[1:] - expert_offsets[:-1]
     return torch.repeat_interleave(
@@ -818,7 +951,12 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             and not is_inference_mode
             and workspace.training_policy.fc1_wgrad == "mxfp8"
         ):
-            x_mx, x_wgrad_mx = _quantize_varlen_dual(
+            dual_quantize = (
+                _quantize_varlen_iso32_dual
+                if _ALL_ISO32 == "1"
+                else _quantize_varlen_dual
+            )
+            x_mx, x_wgrad_mx = dual_quantize(
                 workspace,
                 "forward.x",
                 x,
@@ -1028,7 +1166,12 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
         dout_wgrad_mx = None
         if workspace.training_policy.fc2_dgrad == "mxfp8":
             if _FUSE_VARLEN_DUAL and workspace.training_policy.fc2_wgrad == "mxfp8":
-                dgrad_a, dout_wgrad_mx = _quantize_varlen_dual(
+                dual_quantize = (
+                    _quantize_varlen_iso32_dual
+                    if _ALL_ISO32 == "1"
+                    else _quantize_varlen_dual
+                )
+                dgrad_a, dout_wgrad_mx = dual_quantize(
                     workspace,
                     "backward.dout",
                     dout,
@@ -1179,9 +1322,22 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
         postact_wgrad_mx = None
         dh_wgrad_mx = None
         if (
+            (_DZ_ISO32 == "1" or _ALL_ISO32 == "1")
+            and workspace.training_policy.fc1_dgrad == "mxfp8"
+            and workspace.training_policy.fc1_wgrad == "mxfp8"
+        ):
+            fused_dgrad_h, dh_wgrad_mx = _quantize_varlen_iso32_dual(
+                workspace,
+                "backward.dh_iso32",
+                dh,
+                expert_offsets,
+                stream_key=stream_key,
+            )
+        if (
             _FUSE_VARLEN_K_PAIR
             and workspace.training_policy.fc2_wgrad == "mxfp8"
             and workspace.training_policy.fc1_wgrad == "mxfp8"
+            and dh_wgrad_mx is None
         ):
             postact_wgrad_mx, dh_wgrad_mx = _quantize_varlen_k_pair(
                 workspace,
@@ -1252,14 +1408,33 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     expert_offsets,
                     stream_key=stream_key,
                 )
-            dw2_rows = gemm(
-                dout_wgrad_mx.mT,
-                postact_wgrad_mx,
-                cu_seqlens_k=expert_offsets,
-                dynamic_scheduler=False,
-                tuned=_AUTOTUNE,
-            )
-            dw2 = dw2_rows.permute(1, 2, 0)
+            if workspace.fp32_wgrad_enabled:
+                dw2_rows, add_to_accumulator = workspace._fp32_wgrad_target(
+                    "w2",
+                    (experts, hidden, w2.shape[1]),
+                    dout.device,
+                    stream_key,
+                )
+                wgrad_fn = gemm_add_inplace if add_to_accumulator else gemm
+                wgrad_fn(
+                    dout_wgrad_mx.mT,
+                    postact_wgrad_mx,
+                    dw2_rows,
+                    cu_seqlens_k=expert_offsets,
+                    dynamic_scheduler=False,
+                    tuned=_AUTOTUNE,
+                )
+                workspace._mark_fp32_wgrad("w2")
+                dw2 = None
+            else:
+                dw2_rows = gemm(
+                    dout_wgrad_mx.mT,
+                    postact_wgrad_mx,
+                    cu_seqlens_k=expert_offsets,
+                    dynamic_scheduler=False,
+                    tuned=_AUTOTUNE,
+                )
+                dw2 = dw2_rows.permute(1, 2, 0)
 
         # FC1 dgrad and wgrad use distinct role-correct quantizations.
         if workspace.training_policy.fc1_dgrad == "mxfp8":
@@ -1293,10 +1468,10 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             dynamic_scheduler=False,
             tuned=_AUTOTUNE,
         )
-        dw1_base = torch.empty(
-            (experts, dh.shape[1], hidden), dtype=dh.dtype, device=dh.device
-        )
         if workspace.training_policy.fc1_wgrad == "bf16":
+            dw1_base = torch.empty(
+                (experts, dh.shape[1], hidden), dtype=dh.dtype, device=dh.device
+            )
             gemm(
                 x.T,
                 dh,
@@ -1306,6 +1481,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 dynamic_scheduler=False,
                 tuned=_AUTOTUNE,
             )
+            dw1 = dw1_base.permute(1, 2, 0)
         else:
             x_wgrad_mx = ctx.x_wgrad_mx
             if x_wgrad_mx is None:
@@ -1325,19 +1501,42 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     expert_offsets,
                     stream_key=stream_key,
                 )
-            # Keep the faster H-by-2I GEMM orientation, but write through a
-            # view of the contiguous master-parameter layout (E, 2I, H).
-            gemm(
-                x_wgrad_mx.mT,
-                dh_wgrad_mx,
-                out=dw1_base.transpose(1, 2),
-                cu_seqlens_k=expert_offsets,
-                dynamic_scheduler=False,
-                tuned=_AUTOTUNE,
-            )
-        # PermuteBackward now hands AccumulateGrad the contiguous base instead
-        # of materializing the full W1 gradient a second time.
-        dw1 = dw1_base.permute(1, 2, 0)
+            if workspace.fp32_wgrad_enabled:
+                dw1_base, add_to_accumulator = workspace._fp32_wgrad_target(
+                    "w1",
+                    (experts, dh.shape[1], hidden),
+                    dout.device,
+                    stream_key,
+                )
+                wgrad_fn = gemm_add_inplace if add_to_accumulator else gemm
+                wgrad_fn(
+                    x_wgrad_mx.mT,
+                    dh_wgrad_mx,
+                    dw1_base.transpose(1, 2),
+                    cu_seqlens_k=expert_offsets,
+                    dynamic_scheduler=False,
+                    tuned=_AUTOTUNE,
+                )
+                workspace._mark_fp32_wgrad("w1")
+                dw1 = None
+            else:
+                dw1_base = torch.empty(
+                    (experts, dh.shape[1], hidden),
+                    dtype=dh.dtype,
+                    device=dh.device,
+                )
+                # Keep the faster H-by-2I GEMM orientation, but write through
+                # a view of the contiguous master-parameter layout (E, 2I, H).
+                gemm(
+                    x_wgrad_mx.mT,
+                    dh_wgrad_mx,
+                    out=dw1_base.transpose(1, 2),
+                    cu_seqlens_k=expert_offsets,
+                    dynamic_scheduler=False,
+                    tuned=_AUTOTUNE,
+                )
+                # PermuteBackward hands AccumulateGrad the contiguous base.
+                dw1 = dw1_base.permute(1, 2, 0)
         if b1 is not None:
             assert expert_ids is not None
             db1 = _grouped_sum(dh, expert_ids, experts)

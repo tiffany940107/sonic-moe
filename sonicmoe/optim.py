@@ -171,10 +171,18 @@ class Mxfp8SGD(torch.optim.Optimizer):
     module, a scalar learning rate, and no momentum or weight decay.  Router
     and bias parameters ride the first expert kernel. The two large expert
     weights are updated and quantized in the same memory pass: rowwise for
-    the forward-only policy, or both rowwise and dim-0 for full MXFP8.
+    the forward-only policy, or both rowwise and dim-0 for full MXFP8. Full
+    MXFP8 can accumulate expert wgrads directly in FP32 through Quack's TMA
+    reduce-add path instead of materializing BF16 ``Parameter.grad`` tensors.
     """
 
-    def __init__(self, model: MoE, lr: float = 1e-3) -> None:
+    def __init__(
+        self,
+        model: MoE,
+        lr: float = 1e-3,
+        *,
+        use_fp32_wgrad_accum: bool | None = None,
+    ) -> None:
         if not isinstance(lr, (float, int)) or lr < 0:
             raise ValueError(f"invalid learning rate: {lr}")
         self.model = model
@@ -195,6 +203,23 @@ class Mxfp8SGD(torch.optim.Optimizer):
                 "Mxfp8SGD requires either the forward_only or full mxfp8 policy"
             )
         self._workspace = model._mxfp8_workspace
+        if use_fp32_wgrad_accum is None:
+            accum_mode = os.environ.get("SONICMOE_MXFP8_TMA_WGRAD", "auto")
+            if accum_mode not in ("auto", "0", "1"):
+                raise ValueError("SONICMOE_MXFP8_TMA_WGRAD must be auto, 0, or 1")
+            # The FP32 store doubles expert-gradient traffic and is slower on
+            # the current B200 sparse and dense-topk reference shapes. Keep
+            # auto conservative until a measured shape crossover is known.
+            use_fp32_wgrad_accum = accum_mode == "1"
+        self._use_fp32_wgrad_accum = use_fp32_wgrad_accum
+        if self._use_fp32_wgrad_accum:
+            if not self._dual_weight_refresh:
+                raise RuntimeError(
+                    "FP32 TMA wgrad accumulation requires the full mxfp8 policy"
+                )
+            self._workspace.enable_fp32_wgrad_accumulation(
+                stream_key=self._workspace._stream_key(model.c_fc.weight.device)
+            )
         self._expert_specs = (
             (
                 "w1",
@@ -247,6 +272,11 @@ class Mxfp8SGD(torch.optim.Optimizer):
                 )
             self._prepared_rowwise = tuple(prepared)
             self._prepared_rowwise_pair = _PreparedRowwiseSgdPairLaunch(*prepared)
+
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        super().zero_grad(set_to_none=set_to_none)
+        if self._use_fp32_wgrad_accum:
+            self._workspace.reset_fp32_wgrad_accumulation()
 
     def _fast_rowwise_step(self, learning_rate: float) -> bool:
         if self._prepared_rowwise is None or self._prepared_rowwise_pair is None:
@@ -305,7 +335,11 @@ class Mxfp8SGD(torch.optim.Optimizer):
             residual_updates.append((parameter, parameter.grad))
         fused_residuals = False
         for pair_name, row_name, parameter, weight_view in self._expert_specs:
-            grad = parameter.grad
+            grad = (
+                self._workspace.fp32_wgrad(pair_name)
+                if self._use_fp32_wgrad_accum
+                else parameter.grad
+            )
             if grad is None:
                 continue
             if grad.is_sparse:

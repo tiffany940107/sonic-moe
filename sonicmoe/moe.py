@@ -223,6 +223,10 @@ class MoE(nn.Module):
         self.stream_id = torch.cuda.current_stream().cuda_stream
         self._mxfp8_workspace = Mxfp8Workspace()
 
+    def zero_grad(self, set_to_none: bool = True) -> None:
+        super().zero_grad(set_to_none=set_to_none)
+        self._mxfp8_workspace.reset_fp32_wgrad_accumulation()
+
     def forward(
         self,
         hidden_states: torch.Tensor,
