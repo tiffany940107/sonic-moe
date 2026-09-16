@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 
 from ..enums import ActivationType
+from . import moe_general_routing_inputs
 from .mxfp8 import Mxfp8Workspace, mxfp8_experts
 from .mxfp8_route_pack import Mxfp8RoutePackWorkspace, route_pack_mxfp8
 from .mxfp8_transport import (
@@ -59,6 +60,15 @@ class Mxfp8Dispatched:
     x: torch.Tensor
     qdata: torch.Tensor
     scale: torch.Tensor
+    expert_ids: torch.Tensor
+    weights: torch.Tensor
+
+
+@dataclass(frozen=True)
+class Bf16Dispatched:
+    """Deduplicated receive records transported without activation quantization."""
+
+    x: torch.Tensor
     expert_ids: torch.Tensor
     weights: torch.Tensor
 
@@ -175,6 +185,60 @@ class _Mxfp8Dispatch(torch.autograd.Function):
         return grad_x, None, grad_send_weights, None, None, None, None
 
 
+class _Bf16Dispatch(torch.autograd.Function):
+    """Reference BF16 activation transport with exact reverse dispatch."""
+
+    @staticmethod
+    def forward(
+        ctx,
+        x,
+        send_indices,
+        send_expert_ids,
+        send_weights,
+        input_splits,
+        output_splits,
+        group,
+    ):
+        send_x = x.index_select(0, send_indices)
+        recv_x = _all_to_all_rows_raw(send_x, input_splits, output_splits, group)
+        recv_ids = _all_to_all_rows_raw(
+            send_expert_ids, input_splits, output_splits, group
+        )
+        recv_weights = _all_to_all_rows_raw(
+            send_weights, input_splits, output_splits, group
+        )
+        ctx.input_splits = input_splits
+        ctx.output_splits = output_splits
+        ctx.group = group
+        ctx.source_tokens = x.shape[0]
+        ctx.save_for_backward(send_indices)
+        ctx.mark_non_differentiable(recv_ids)
+        return recv_x, recv_ids, recv_weights
+
+    @staticmethod
+    def backward(ctx, grad_recv_x, _grad_recv_ids, grad_recv_weights):
+        (send_indices,) = ctx.saved_tensors
+        returned_x = _all_to_all_rows_raw(
+            grad_recv_x,
+            ctx.output_splits,
+            ctx.input_splits,
+            ctx.group,
+        )
+        returned_weights = _all_to_all_rows_raw(
+            grad_recv_weights,
+            ctx.output_splits,
+            ctx.input_splits,
+            ctx.group,
+        )
+        grad_x = torch.zeros(
+            (ctx.source_tokens, returned_x.shape[1]),
+            dtype=returned_x.dtype,
+            device=returned_x.device,
+        )
+        grad_x.index_add_(0, send_indices, returned_x)
+        return grad_x, None, None, returned_weights, None, None, None
+
+
 class _PackedMxfp8Dispatch(torch.autograd.Function):
     """One-collective packed forward and backward MXFP8 transport."""
 
@@ -189,34 +253,47 @@ class _PackedMxfp8Dispatch(torch.autograd.Function):
         output_splits,
         group,
         dequantize,
+        comm_stream,
     ):
-        qdata, scale = quantize_mxfp8_rows(x.contiguous())
-        send_payload, layout = pack_mxfp8_transport(
-            qdata,
-            scale,
-            send_indices,
-            send_expert_ids,
-            send_weights,
-        )
-        recv_payload = _all_to_all_rows_raw(
-            send_payload, input_splits, output_splits, group
-        )
-        recv_qdata, recv_scale, _recv_ids, payload_weights = unpack_mxfp8_transport(
-            recv_payload, layout
-        )
-        # Router scores are the differentiable field. Materialize only this
-        # small field as a custom-Function output; value/scale/IDs remain
-        # zero-copy strided views of the received byte records.
-        recv_weights = payload_weights.contiguous()
-        recv_x = (
-            dequantize_mxfp8_rows(recv_qdata, recv_scale, dtype=x.dtype)
-            if dequantize
-            else torch.empty(
-                (recv_payload.shape[0], x.shape[1]),
-                dtype=x.dtype,
-                device=x.device,
+        def launch():
+            qdata, scale = quantize_mxfp8_rows(x.contiguous())
+            send_payload, layout = pack_mxfp8_transport(
+                qdata,
+                scale,
+                send_indices,
+                send_expert_ids,
+                send_weights,
             )
-        )
+            recv_payload = _all_to_all_rows_raw(
+                send_payload, input_splits, output_splits, group
+            )
+            recv_qdata, recv_scale, _recv_ids, payload_weights = unpack_mxfp8_transport(
+                recv_payload, layout
+            )
+            # Router scores are the differentiable field. Materialize only this
+            # small field as a custom-Function output; value/scale/IDs remain
+            # zero-copy strided views of the received byte records.
+            recv_weights = payload_weights.contiguous()
+            recv_x = (
+                dequantize_mxfp8_rows(recv_qdata, recv_scale, dtype=x.dtype)
+                if dequantize
+                else torch.empty(
+                    (recv_payload.shape[0], x.shape[1]),
+                    dtype=x.dtype,
+                    device=x.device,
+                )
+            )
+            return recv_x, recv_payload, recv_weights
+
+        if comm_stream is None:
+            recv_x, recv_payload, recv_weights = launch()
+        else:
+            producer_stream = torch.cuda.current_stream(x.device)
+            comm_stream.wait_stream(producer_stream)
+            for tensor in (x, send_indices, send_expert_ids, send_weights):
+                tensor.record_stream(comm_stream)
+            with torch.cuda.stream(comm_stream):
+                recv_x, recv_payload, recv_weights = launch()
 
         ctx.input_splits = input_splits
         ctx.output_splits = output_splits
@@ -224,6 +301,7 @@ class _PackedMxfp8Dispatch(torch.autograd.Function):
         ctx.source_tokens = x.shape[0]
         ctx.hidden = x.shape[1]
         ctx.top_k = send_expert_ids.shape[1]
+        ctx.comm_stream = comm_stream
         ctx.save_for_backward(send_indices)
         ctx.mark_non_differentiable(recv_payload)
         return recv_x, recv_payload, recv_weights
@@ -231,38 +309,53 @@ class _PackedMxfp8Dispatch(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_recv_x, _grad_payload, grad_recv_weights):
         (send_indices,) = ctx.saved_tensors
-        recv_records = sum(ctx.output_splits)
-        grad_record_bytes = ctx.hidden * grad_recv_x.element_size() + ctx.top_k * 4
-        grad_payload = torch.empty(
-            (recv_records, grad_record_bytes),
-            dtype=torch.uint8,
-            device=grad_recv_x.device,
-        )
-        grad_x_bytes = ctx.hidden * grad_recv_x.element_size()
-        payload_x = grad_payload[:, :grad_x_bytes].view(grad_recv_x.dtype)
-        payload_weights = grad_payload[:, grad_x_bytes:].view(torch.float32)
-        payload_x.copy_(grad_recv_x)
-        payload_weights.copy_(grad_recv_weights)
 
-        returned_payload = _all_to_all_rows_raw(
-            grad_payload,
-            ctx.output_splits,
-            ctx.input_splits,
-            ctx.group,
-        )
-        returned_x = returned_payload[:, :grad_x_bytes].view(grad_recv_x.dtype)
-        returned_weights = returned_payload[:, grad_x_bytes:].view(torch.float32)
-        grad_x = torch.zeros(
-            (ctx.source_tokens, ctx.hidden),
-            dtype=grad_recv_x.dtype,
-            device=grad_recv_x.device,
-        )
-        grad_x.index_add_(0, send_indices, returned_x)
+        def launch():
+            recv_records = sum(ctx.output_splits)
+            grad_record_bytes = ctx.hidden * grad_recv_x.element_size() + ctx.top_k * 4
+            grad_payload = torch.empty(
+                (recv_records, grad_record_bytes),
+                dtype=torch.uint8,
+                device=grad_recv_x.device,
+            )
+            grad_x_bytes = ctx.hidden * grad_recv_x.element_size()
+            payload_x = grad_payload[:, :grad_x_bytes].view(grad_recv_x.dtype)
+            payload_weights = grad_payload[:, grad_x_bytes:].view(torch.float32)
+            payload_x.copy_(grad_recv_x)
+            payload_weights.copy_(grad_recv_weights)
+
+            returned_payload = _all_to_all_rows_raw(
+                grad_payload,
+                ctx.output_splits,
+                ctx.input_splits,
+                ctx.group,
+            )
+            returned_x = returned_payload[:, :grad_x_bytes].view(grad_recv_x.dtype)
+            returned_weights = returned_payload[:, grad_x_bytes:].view(torch.float32)
+            grad_x = torch.zeros(
+                (ctx.source_tokens, ctx.hidden),
+                dtype=grad_recv_x.dtype,
+                device=grad_recv_x.device,
+            )
+            grad_x.index_add_(0, send_indices, returned_x)
+            return grad_x, returned_weights
+
+        if ctx.comm_stream is None:
+            grad_x, returned_weights = launch()
+        else:
+            autograd_stream = torch.cuda.current_stream(grad_recv_x.device)
+            ctx.comm_stream.wait_stream(autograd_stream)
+            grad_recv_x.record_stream(ctx.comm_stream)
+            grad_recv_weights.record_stream(ctx.comm_stream)
+            with torch.cuda.stream(ctx.comm_stream):
+                grad_x, returned_weights = launch()
+            autograd_stream.wait_stream(ctx.comm_stream)
         return (
             grad_x,
             None,
             None,
             returned_weights,
+            None,
             None,
             None,
             None,
@@ -303,14 +396,20 @@ def make_expert_parallel_dispatch_plan(
         raise ValueError("expert maps and routing tensors must share a device")
 
     ids = expert_ids.to(torch.int64)
-    destinations = expert_to_rank.index_select(0, ids.reshape(-1)).view_as(ids)
-    local_ids = expert_to_local.index_select(0, ids.reshape(-1)).view_as(ids)
+    # ``-1`` is the transport-level masked-slot sentinel.  Replace it only for
+    # the map lookup, then keep it excluded from every destination mask below.
+    # This lets callers preserve a fixed top-k record width without dispatching
+    # a fake expert or a zero-weight route.
+    valid = ids >= 0
+    safe_ids = ids.clamp_min(0)
+    destinations = expert_to_rank.index_select(0, safe_ids.reshape(-1)).view_as(ids)
+    local_ids = expert_to_local.index_select(0, safe_ids.reshape(-1)).view_as(ids)
     token_chunks = []
     id_chunks = []
     weight_chunks = []
     send_counts = []
     for destination in range(world):
-        route_mask = destinations == destination
+        route_mask = valid & (destinations == destination)
         token_indices = torch.where(route_mask.any(dim=1))[0]
         selected_mask = route_mask.index_select(0, token_indices)
         selected_ids = local_ids.index_select(0, token_indices)
@@ -349,6 +448,7 @@ def dispatch_mxfp8(
     *,
     dequantize: bool = True,
     packed_transport: bool = False,
+    comm_stream: torch.cuda.Stream | None = None,
 ) -> Mxfp8Dispatched:
     """Send source-quantized activations, local IDs, and differentiable scores."""
     if packed_transport:
@@ -361,6 +461,7 @@ def dispatch_mxfp8(
             plan.recv_counts,
             group,
             dequantize,
+            comm_stream,
         )
         recv_qdata, recv_scale, recv_ids, _payload_weights = unpack_mxfp8_transport(
             recv_payload,
@@ -394,6 +495,82 @@ def dispatch_mxfp8(
     )
 
 
+def dispatch_bf16(
+    x: torch.Tensor,
+    plan: ExpertParallelDispatchPlan,
+    group=None,
+) -> Bf16Dispatched:
+    """Reference dispatch that keeps activation rows in BF16."""
+    recv_x, recv_ids, recv_weights = _Bf16Dispatch.apply(
+        x,
+        plan.send_token_indices_flat,
+        plan.send_expert_ids,
+        plan.send_weights,
+        plan.send_counts,
+        plan.recv_counts,
+        group,
+    )
+    return Bf16Dispatched(recv_x, recv_ids, recv_weights)
+
+
+def local_bf16_experts(
+    dispatched: Bf16Dispatched,
+    w1: torch.Tensor,
+    b1: torch.Tensor | None,
+    w2: torch.Tensor,
+    b2: torch.Tensor | None,
+    activation_type: ActivationType,
+    *,
+    is_inference_mode: bool,
+) -> torch.Tensor:
+    """Official Sonic BF16 local expert path for EP correctness/performance A/B."""
+    recv_tokens, top_k = dispatched.expert_ids.shape
+    hidden = dispatched.x.shape[1]
+    valid = dispatched.expert_ids >= 0
+    if not bool(valid.any().item()):
+        if is_inference_mode:
+            return torch.zeros(
+                (recv_tokens, hidden),
+                dtype=dispatched.x.dtype,
+                device=dispatched.x.device,
+            )
+        parameter_zero = w1.sum() * 0.0 + w2.sum() * 0.0
+        if b1 is not None:
+            parameter_zero = parameter_zero + b1.sum() * 0.0
+        if b2 is not None:
+            parameter_zero = parameter_zero + b2.sum() * 0.0
+        transport_zero = dispatched.x.sum() * 0.0 + dispatched.weights.sum() * 0.0
+        return torch.zeros(
+            (recv_tokens, hidden),
+            dtype=dispatched.x.dtype,
+            device=dispatched.x.device,
+        ) + (parameter_zero + transport_zero).to(dispatched.x.dtype)
+
+    recv_rows = (
+        torch.arange(recv_tokens, dtype=torch.int32, device=dispatched.x.device)
+        .unsqueeze(1)
+        .expand(-1, top_k)
+    )
+    token_indices = recv_rows[valid].contiguous()
+    expert_indices = dispatched.expert_ids[valid].contiguous()
+    scores = dispatched.weights[valid].contiguous()
+    reduced, _ = moe_general_routing_inputs(
+        dispatched.x,
+        scores,
+        token_indices,
+        expert_indices,
+        w1.permute(1, 2, 0),
+        b1,
+        w2.permute(1, 2, 0),
+        b2,
+        w2.shape[0],
+        torch.cuda.current_stream(dispatched.x.device).cuda_stream,
+        activation_type,
+        is_inference_mode,
+    )
+    return reduced
+
+
 def local_mxfp8_experts(
     dispatched: Mxfp8Dispatched,
     w1: torch.Tensor,
@@ -406,6 +583,7 @@ def local_mxfp8_experts(
     is_inference_mode: bool,
     route_workspace: Mxfp8RoutePackWorkspace | None = None,
     reduce_workspace: Mxfp8WeightedReduceWorkspace | None = None,
+    zero_material_qdata: bool = True,
 ) -> torch.Tensor:
     """Compute all received local routes and reduce them per receive record."""
     recv_tokens, top_k = dispatched.expert_ids.shape
@@ -413,6 +591,12 @@ def local_mxfp8_experts(
     valid = dispatched.expert_ids >= 0
     pair_count = int(valid.sum().item())
     if pair_count == 0:
+        if is_inference_mode:
+            return torch.zeros(
+                (recv_tokens, hidden),
+                dtype=dispatched.x.dtype,
+                device=dispatched.x.device,
+            )
         # Keep every local expert parameter in the graph. A completely empty
         # destination rank must materialize zero gradients rather than ``None``
         # so optimizer and sharded-training semantics match an EP1 grouped GEMM.
@@ -476,6 +660,7 @@ def local_mxfp8_experts(
             dispatched.weights.detach(),
             pair_count,
             route_workspace,
+            materialize_qdata=not zero_material_qdata,
         )
         expert_offsets = packed.indptr
         compact_to_grouped = packed.scatter_pos[valid.reshape(-1)].contiguous()
@@ -526,6 +711,7 @@ def local_mxfp8_experts(
         is_inference_mode,
         scores_are_grouped=True,
         prepacked_input=prepacked_input,
+        prepacked_a_idx=None if route_workspace is None else packed.a_idx,
     )
     if route_workspace is not None and reduce_workspace is not None:
         return segmented_weighted_reduce_mxfp8(
@@ -575,10 +761,13 @@ def combine_expert_parallel(
 
 
 __all__ = [
+    "Bf16Dispatched",
     "ExpertParallelDispatchPlan",
     "Mxfp8Dispatched",
     "combine_expert_parallel",
+    "dispatch_bf16",
     "dispatch_mxfp8",
+    "local_bf16_experts",
     "local_mxfp8_experts",
     "make_expert_parallel_dispatch_plan",
 ]

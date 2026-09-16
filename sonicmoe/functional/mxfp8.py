@@ -945,6 +945,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
         scores_are_grouped: bool,
         prepacked_qdata: torch.Tensor | None,
         prepacked_scale: torch.Tensor | None,
+        prepacked_a_idx: torch.Tensor | None,
     ) -> torch.Tensor:
         experts, hidden, intermediate = _require_supported(x, w1, w2, activation_type)
         total_m = x_gather_idx.numel()
@@ -953,10 +954,21 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 "prepacked MXFP8 values and scales must be provided together"
             )
         if prepacked_qdata is not None:
-            if prepacked_qdata.shape != (total_m, hidden):
+            if prepacked_qdata.ndim != 2 or prepacked_qdata.shape[1] != hidden:
                 raise ValueError(
                     "prepacked MXFP8 values do not match routed input shape"
                 )
+            if prepacked_a_idx is None:
+                if prepacked_qdata.shape[0] != total_m:
+                    raise ValueError(
+                        "prepacked MXFP8 rows require A_idx when physically deduplicated"
+                    )
+            elif (
+                prepacked_a_idx.shape != (total_m,)
+                or prepacked_a_idx.dtype != torch.int32
+                or prepacked_a_idx.device != prepacked_qdata.device
+            ):
+                raise ValueError("prepacked A_idx must be a matching CUDA int32 vector")
             x_mx = BlockScaledOperand.from_parts(
                 prepacked_qdata,
                 prepacked_scale,
@@ -973,7 +985,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 and workspace.training_policy.fc1_wgrad == "mxfp8"
                 else None
             )
-            fc1_a_idx = None
+            fc1_a_idx = prepacked_a_idx
         elif (
             _FUSE_VARLEN_DUAL
             and not is_inference_mode
@@ -1588,7 +1600,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             dw2,
             db2,
             dtopk_scores,
-            *[None] * 13,
+            *[None] * 14,
         )
 
 
@@ -1611,6 +1623,7 @@ def mxfp8_experts(
     is_inference_mode: bool,
     scores_are_grouped: bool = False,
     prepacked_input: BlockScaledOperand | None = None,
+    prepacked_a_idx: torch.Tensor | None = None,
 ) -> torch.Tensor:
     workspace = Mxfp8Workspace() if workspace is None else workspace
     return _Mxfp8ExpertsFunction.apply(
@@ -1633,6 +1646,7 @@ def mxfp8_experts(
         scores_are_grouped,
         None if prepacked_input is None else prepacked_input.qdata,
         None if prepacked_input is None else prepacked_input.scale,
+        prepacked_a_idx,
     )
 
 

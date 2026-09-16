@@ -67,7 +67,10 @@ def test_route_pack_preserves_value_scale_and_metadata_bytes():
     assert int(result.indptr[-1]) == total_pairs
     assert torch.all(result.expert[:-1] <= result.expert[1:])
     recv = result.recv_token.to(torch.int64)
-    assert torch.equal(result.operand.qdata, qdata.index_select(0, recv))
+    assert result.operand.qdata.data_ptr() == qdata.data_ptr()
+    assert not result.physical_qdata_copied
+    assert torch.equal(result.operand.qdata, qdata)
+    assert torch.equal(result.a_idx.to(torch.int64), recv)
     scales = _unpack_active_scales(result.operand.scale, result.indptr, hidden // 32)
     assert torch.equal(
         scales.view(torch.uint8),
@@ -103,12 +106,16 @@ def test_route_pack_reuses_capacity_and_handles_empty_receive_rank():
         )
     )
     source = torch.randn(19, 256, dtype=torch.bfloat16, device="cuda")
-    qdata, scale = quantize_mxfp8_rows(source)
+    contiguous_qdata, scale = quantize_mxfp8_rows(source)
+    payload = torch.empty(19, 260, dtype=torch.uint8, device="cuda")
+    qdata = payload[:, :256].view(contiguous_qdata.dtype)
+    qdata.copy_(contiguous_qdata)
     expert_ids = torch.arange(76, dtype=torch.int32, device="cuda").view(19, 4) % 8
     weights = torch.full((19, 4), 0.25, dtype=torch.float32, device="cuda")
     for _ in range(2):
         result = route_pack_mxfp8(qdata, scale, expert_ids, weights, 76, workspace)
         assert result.operand.qdata.data_ptr() == workspace.qdata.data_ptr()
+        assert result.physical_qdata_copied
     assert pointers == tuple(
         tensor.data_ptr()
         for tensor in (

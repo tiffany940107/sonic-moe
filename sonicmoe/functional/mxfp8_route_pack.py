@@ -216,6 +216,8 @@ class Mxfp8RoutePackWorkspace:
 @dataclass(frozen=True)
 class Mxfp8RoutePackResult:
     operand: BlockScaledOperand
+    a_idx: torch.Tensor | None
+    physical_qdata_copied: bool
     recv_token: torch.Tensor
     expert: torch.Tensor
     weights: torch.Tensor
@@ -224,7 +226,7 @@ class Mxfp8RoutePackResult:
 
     @property
     def total_pairs(self) -> int:
-        return self.operand.shape[0]
+        return self.weights.shape[0]
 
 
 def allocate_mxfp8_route_pack_workspace(
@@ -235,6 +237,7 @@ def allocate_mxfp8_route_pack_workspace(
     hidden: int,
     *,
     device: torch.device | str,
+    qdata_rows: int | None = None,
 ) -> Mxfp8RoutePackWorkspace:
     if min(max_recv_tokens, max_pairs) < 0:
         raise ValueError("route-pack capacities must be non-negative")
@@ -244,10 +247,13 @@ def allocate_mxfp8_route_pack_workspace(
         raise ValueError("hidden must be divisible by 128")
     if max_pairs > max_recv_tokens * top_k:
         raise ValueError("max_pairs exceeds max_recv_tokens * top_k")
+    qdata_rows = max_pairs if qdata_rows is None else qdata_rows
+    if not 0 <= qdata_rows <= max_pairs:
+        raise ValueError("qdata_rows must be in [0, max_pairs]")
     padded_rm = (max_pairs + 127) // 128 + local_experts - 1
     return Mxfp8RoutePackWorkspace(
         qdata=torch.empty(
-            (max_pairs, hidden), dtype=MXFP8_E4M3.qdata_dtype, device=device
+            (qdata_rows, hidden), dtype=MXFP8_E4M3.qdata_dtype, device=device
         ),
         scale=torch.empty(
             (1, padded_rm, (hidden + 127) // 128, 32, 4, 4),
@@ -278,6 +284,8 @@ def route_pack_mxfp8(
     weights: torch.Tensor,
     total_pairs: int,
     workspace: Mxfp8RoutePackWorkspace,
+    *,
+    materialize_qdata: bool = False,
 ) -> Mxfp8RoutePackResult:
     """Group local routes and directly form a Quack variable-M operand."""
     if qdata.dtype != MXFP8_E4M3.qdata_dtype or qdata.ndim != 2:
@@ -310,6 +318,30 @@ def route_pack_mxfp8(
         raise ValueError("all route-pack tensors must share a device")
 
     num_slots = recv_tokens * top_k
+    # TMA gather accepts a pitched physical A when its base and row pitch meet
+    # the 16-byte descriptor alignment.  Common H=1024/2048 transport records
+    # satisfy that contract, so consume their AoS qdata field with no copy.  A
+    # narrow or oddly-sized record falls back to one contiguous copy per receive
+    # token; it still avoids the old copy per valid route.
+    direct_physical_qdata = (
+        not materialize_qdata
+        and qdata.data_ptr() % 16 == 0
+        and qdata.stride(0) * qdata.element_size() % 16 == 0
+    )
+    physical_qdata_copied = not materialize_qdata and not direct_physical_qdata
+    required_qdata_rows = (
+        total_pairs
+        if materialize_qdata
+        else recv_tokens
+        if physical_qdata_copied
+        else 0
+    )
+    if workspace.qdata.shape[0] < required_qdata_rows:
+        raise ValueError(
+            "route-pack qdata workspace is smaller than the selected storage policy"
+        )
+    if physical_qdata_copied and recv_tokens:
+        workspace.qdata[:recv_tokens].copy_(qdata)
     workspace.counts.zero_()
     if num_slots:
         _expert_histogram_kernel[(triton.cdiv(num_slots, 256),)](
@@ -348,20 +380,21 @@ def route_pack_mxfp8(
         )
         block_rows = 4
         block_cols = 256
-        _gather_qdata_kernel[
-            (triton.cdiv(num_slots, block_rows), triton.cdiv(hidden, block_cols))
-        ](
-            qdata.view(torch.uint8),
-            workspace.scatter_pos,
-            workspace.qdata.view(torch.uint8),
-            qdata.stride(0),
-            num_slots=num_slots,
-            hidden=hidden,
-            top_k=top_k,
-            BLOCK_ROWS=block_rows,
-            BLOCK_COLS=block_cols,
-            num_warps=4,
-        )
+        if materialize_qdata:
+            _gather_qdata_kernel[
+                (triton.cdiv(num_slots, block_rows), triton.cdiv(hidden, block_cols))
+            ](
+                qdata.view(torch.uint8),
+                workspace.scatter_pos,
+                workspace.qdata.view(torch.uint8),
+                qdata.stride(0),
+                num_slots=num_slots,
+                hidden=hidden,
+                top_k=top_k,
+                BLOCK_ROWS=block_rows,
+                BLOCK_COLS=block_cols,
+                num_warps=4,
+            )
         scale_cols = 64
         _gather_blocked_scale_kernel[
             (triton.cdiv(num_slots, block_rows), triton.cdiv(sf_k, scale_cols))
@@ -385,13 +418,21 @@ def route_pack_mxfp8(
 
     padded_rm = (total_pairs + 127) // 128 + workspace.local_experts - 1
     operand = BlockScaledOperand.from_parts(
-        workspace.qdata[:total_pairs],
+        (
+            workspace.qdata[:total_pairs]
+            if materialize_qdata
+            else qdata
+            if direct_physical_qdata
+            else workspace.qdata[:recv_tokens]
+        ),
         workspace.scale[:, :padded_rm],
         MXFP8_E4M3,
         orig_dtype=torch.bfloat16,
     )
     return Mxfp8RoutePackResult(
         operand=operand,
+        a_idx=None if materialize_qdata else workspace.recv_token[:total_pairs],
+        physical_qdata_copied=physical_qdata_copied,
         recv_token=workspace.recv_token[:total_pairs],
         expert=workspace.expert[:total_pairs],
         weights=workspace.weights[:total_pairs],

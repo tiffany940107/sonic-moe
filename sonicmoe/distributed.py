@@ -5,16 +5,20 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from torch import nn
 
-from .enums import ActivationType, is_glu
+from .enums import ActivationType, KernelBackendMoE, is_glu
 from .functional import TC_Softmax_Topk_Router_Function
 from .functional.ep4 import (
     combine_expert_parallel,
+    dispatch_bf16,
     dispatch_mxfp8,
+    local_bf16_experts,
     local_mxfp8_experts,
     make_expert_parallel_dispatch_plan,
 )
@@ -72,8 +76,12 @@ class ExpertParallelMoE(nn.Module):
         process_group=None,
         placement: torch.Tensor | None = None,
         use_fused_transport: bool = True,
-        use_fused_route_pack: bool = True,
-        use_fused_reduce: bool = True,
+        use_fused_route_pack: bool | None = None,
+        use_fused_reduce: bool | None = None,
+        route_pack_min_elements: int | None = None,
+        use_zero_material_qdata: bool | None = None,
+        expert_backend: KernelBackendMoE | str = KernelBackendMoE.sonicmoe_mxfp8,
+        use_comm_overlap: bool = False,
     ) -> None:
         super().__init__()
         if not dist.is_initialized():
@@ -103,6 +111,34 @@ class ExpertParallelMoE(nn.Module):
         self.use_fused_transport = use_fused_transport
         self.use_fused_route_pack = use_fused_route_pack
         self.use_fused_reduce = use_fused_reduce
+        if route_pack_min_elements is None:
+            route_pack_min_elements = int(
+                os.environ.get("SONICMOE_MXFP8_EP_ROUTE_PACK_MIN_ELEMENTS", "2000000")
+            )
+        if route_pack_min_elements < 0:
+            raise ValueError("route_pack_min_elements must be non-negative")
+        self.route_pack_min_elements = route_pack_min_elements
+        zero_material_env = os.environ.get(
+            "SONICMOE_MXFP8_EP_ZERO_MATERIAL_QDATA", "auto"
+        ).lower()
+        if use_zero_material_qdata is None and zero_material_env != "auto":
+            if zero_material_env not in ("0", "1"):
+                raise ValueError(
+                    "SONICMOE_MXFP8_EP_ZERO_MATERIAL_QDATA must be auto, 0, or 1"
+                )
+            use_zero_material_qdata = zero_material_env == "1"
+        self.use_zero_material_qdata = use_zero_material_qdata
+        self.expert_backend = KernelBackendMoE(expert_backend)
+        if self.expert_backend not in (
+            KernelBackendMoE.sonicmoe,
+            KernelBackendMoE.sonicmoe_mxfp8,
+        ):
+            raise ValueError("EP expert_backend must be sonicmoe or sonicmoe_mxfp8")
+        self._last_route_pack_enabled = False
+        self._last_reduce_enabled = False
+        self._last_zero_material_qdata = False
+        self.use_comm_overlap = use_comm_overlap
+        self._comm_stream: torch.cuda.Stream | None = None
 
         default_placement = torch.arange(num_experts) // self.local_experts
         placement_cpu, local_map, logical_by_rank = _placement_maps(
@@ -145,8 +181,12 @@ class ExpertParallelMoE(nn.Module):
         process_group=None,
         placement: torch.Tensor | None = None,
         use_fused_transport: bool = True,
-        use_fused_route_pack: bool = True,
-        use_fused_reduce: bool = True,
+        use_fused_route_pack: bool | None = None,
+        use_fused_reduce: bool | None = None,
+        route_pack_min_elements: int | None = None,
+        use_zero_material_qdata: bool | None = None,
+        expert_backend: KernelBackendMoE | str = KernelBackendMoE.sonicmoe_mxfp8,
+        use_comm_overlap: bool = False,
     ) -> ExpertParallelMoE:
         """Create an expert shard and copy parameters from a full ``MoE``."""
         module = cls(
@@ -162,6 +202,10 @@ class ExpertParallelMoE(nn.Module):
             use_fused_transport=use_fused_transport,
             use_fused_route_pack=use_fused_route_pack,
             use_fused_reduce=use_fused_reduce,
+            route_pack_min_elements=route_pack_min_elements,
+            use_zero_material_qdata=use_zero_material_qdata,
+            expert_backend=expert_backend,
+            use_comm_overlap=use_comm_overlap,
         ).to(device=moe.c_fc.weight.device, dtype=moe.c_fc.weight.dtype)
         module.load_from_full_(moe)
         module.train(moe.training)
@@ -188,18 +232,99 @@ class ExpertParallelMoE(nn.Module):
             self.c_proj.bias.copy_(moe.c_proj.bias.index_select(0, logical))
         self._mxfp8_workspace.clear()
 
+    @torch.no_grad()
+    def set_expert_placement_(self, placement: torch.Tensor) -> ExpertParallelMoE:
+        """Collectively migrate BF16 expert masters to a new logical placement.
+
+        Every EP rank must call this method with the same mapping at a step
+        boundary. Parameter objects remain stable, but optimizer state is not
+        migrated; optimizers with per-expert state must be rebuilt afterwards.
+        """
+        placement_cpu, local_map, logical_by_rank = _placement_maps(
+            placement, self.ep_size
+        )
+        device = self.c_fc.weight.device
+        proposed = placement_cpu.to(device=device)
+        gathered_proposals = [torch.empty_like(proposed) for _ in range(self.ep_size)]
+        dist.all_gather(
+            gathered_proposals,
+            proposed,
+            group=self.process_group,
+        )
+        if any(
+            not torch.equal(candidate, proposed) for candidate in gathered_proposals
+        ):
+            raise RuntimeError("all EP ranks must install the same expert placement")
+
+        version_bounds = torch.tensor(
+            [self.placement_version.item(), self.placement_version.item()],
+            dtype=torch.int64,
+            device=device,
+        )
+        dist.all_reduce(
+            version_bounds[:1],
+            op=dist.ReduceOp.MIN,
+            group=self.process_group,
+        )
+        dist.all_reduce(
+            version_bounds[1:],
+            op=dist.ReduceOp.MAX,
+            group=self.process_group,
+        )
+        if version_bounds[0] != version_bounds[1]:
+            raise RuntimeError("expert placement versions diverged across EP ranks")
+
+        current_ids = self.local_expert_ids.to(device=device, dtype=torch.int64)
+        ids_by_rank = [torch.empty_like(current_ids) for _ in range(self.ep_size)]
+        dist.all_gather(ids_by_rank, current_ids, group=self.process_group)
+        new_ids = logical_by_rank[self.ep_rank].to(device=device)
+
+        def migrate(parameter: torch.Tensor | None) -> None:
+            if parameter is None:
+                return
+            shards = [torch.empty_like(parameter) for _ in range(self.ep_size)]
+            dist.all_gather(shards, parameter.contiguous(), group=self.process_group)
+            global_parameter = torch.empty(
+                (self.num_experts, *parameter.shape[1:]),
+                dtype=parameter.dtype,
+                device=parameter.device,
+            )
+            for logical_ids, shard in zip(ids_by_rank, shards):
+                global_parameter.index_copy_(0, logical_ids, shard)
+            parameter.copy_(global_parameter.index_select(0, new_ids))
+
+        migrate(self.c_fc.weight)
+        migrate(self.c_fc.bias)
+        migrate(self.c_proj.weight)
+        migrate(self.c_proj.bias)
+        self.expert_to_rank.copy_(placement_cpu.to(self.expert_to_rank.device))
+        self.expert_to_local.copy_(local_map.to(self.expert_to_local.device))
+        self.local_expert_ids.copy_(new_ids.to(self.local_expert_ids.device))
+        self.placement_version.add_(1)
+        self._mxfp8_workspace.clear()
+        self._route_workspace = None
+        self._reduce_workspace = None
+        return self
+
     def _get_route_workspace(
-        self, recv_tokens: int, device: torch.device
+        self,
+        recv_tokens: int,
+        device: torch.device,
+        *,
+        enabled: bool,
+        zero_material_qdata: bool,
     ) -> Mxfp8RoutePackWorkspace | None:
-        if not self.use_fused_route_pack:
+        if not enabled:
             return None
         capacity = 1 << (max(1, recv_tokens) - 1).bit_length()
         current = self._route_workspace
+        qdata_rows = capacity if zero_material_qdata else capacity * self.top_k
         if (
             current is None
             or current.max_recv_tokens < capacity
             or current.hidden != self.hidden_size
             or current.top_k != self.top_k
+            or current.qdata.shape[0] < qdata_rows
         ):
             self._route_workspace = allocate_mxfp8_route_pack_workspace(
                 capacity,
@@ -208,13 +333,14 @@ class ExpertParallelMoE(nn.Module):
                 self.local_experts,
                 self.hidden_size,
                 device=device,
+                qdata_rows=qdata_rows,
             )
         return self._route_workspace
 
     def _get_reduce_workspace(
-        self, recv_tokens: int, device: torch.device
+        self, recv_tokens: int, device: torch.device, *, enabled: bool
     ) -> Mxfp8WeightedReduceWorkspace | None:
-        if not (self.use_fused_route_pack and self.use_fused_reduce):
+        if not enabled:
             return None
         capacity = 1 << (max(1, recv_tokens) - 1).bit_length()
         current = self._reduce_workspace
@@ -227,6 +353,13 @@ class ExpertParallelMoE(nn.Module):
                 capacity, self.hidden_size, device=device
             )
         return self._reduce_workspace
+
+    def _get_comm_stream(self, device: torch.device) -> torch.cuda.Stream | None:
+        if not self.use_comm_overlap:
+            return None
+        if self._comm_stream is None:
+            self._comm_stream = torch.cuda.Stream(device=device, priority=-1)
+        return self._comm_stream
 
     def forward(
         self,
@@ -244,6 +377,25 @@ class ExpertParallelMoE(nn.Module):
             True,
             False,
         )
+        use_mxfp8 = self.expert_backend == KernelBackendMoE.sonicmoe_mxfp8
+        use_route_pack = use_mxfp8 and (
+            x.numel() >= self.route_pack_min_elements
+            if self.use_fused_route_pack is None
+            else self.use_fused_route_pack
+        )
+        use_reduce = (
+            use_route_pack
+            if self.use_fused_reduce is None
+            else use_route_pack and self.use_fused_reduce
+        )
+        self._last_route_pack_enabled = use_route_pack
+        self._last_reduce_enabled = use_reduce
+        use_zero_material_qdata = use_route_pack and (
+            self.top_k >= 4
+            if self.use_zero_material_qdata is None
+            else self.use_zero_material_qdata
+        )
+        self._last_zero_material_qdata = use_zero_material_qdata
         plan = make_expert_parallel_dispatch_plan(
             topk_indices,
             topk_scores,
@@ -252,37 +404,72 @@ class ExpertParallelMoE(nn.Module):
             self.process_group,
         )
         expert_inference = is_inference_mode or not self.training
-        dispatched = dispatch_mxfp8(
-            x,
-            plan,
-            self.process_group,
-            dequantize=not (self.use_fused_route_pack and expert_inference),
-            packed_transport=self.use_fused_transport,
-        )
-        route_workspace = self._get_route_workspace(
-            dispatched.x.shape[0], dispatched.x.device
-        )
-        reduce_workspace = self._get_reduce_workspace(
-            dispatched.x.shape[0], dispatched.x.device
-        )
-        local_reduced = local_mxfp8_experts(
-            dispatched,
-            self.c_fc.weight,
-            self.c_fc.bias,
-            self.c_proj.weight,
-            self.c_proj.bias,
-            self.activation_function,
-            self._mxfp8_workspace,
-            is_inference_mode=expert_inference,
-            route_workspace=route_workspace,
-            reduce_workspace=reduce_workspace,
-        )
+        aux_loss = None
+        if use_mxfp8:
+            comm_stream = (
+                self._get_comm_stream(x.device) if self.use_fused_transport else None
+            )
+            dispatched = dispatch_mxfp8(
+                x,
+                plan,
+                self.process_group,
+                dequantize=not (use_route_pack and expert_inference),
+                packed_transport=self.use_fused_transport,
+                comm_stream=comm_stream,
+            )
+            if not is_inference_mode:
+                expert_frequency = torch.bincount(
+                    topk_indices.reshape(-1).to(torch.int64),
+                    minlength=self.num_experts,
+                ).to(torch.float32)
+                probs = F.softmax(router_logits, dim=-1, dtype=torch.float32)
+                aux_loss = (
+                    self.num_experts
+                    * (
+                        F.normalize(probs.sum(0), p=1, dim=0)
+                        * F.normalize(expert_frequency, p=1, dim=0)
+                    ).sum()
+                )
+            if comm_stream is not None:
+                torch.cuda.current_stream(x.device).wait_stream(comm_stream)
+            route_workspace = self._get_route_workspace(
+                dispatched.x.shape[0],
+                dispatched.x.device,
+                enabled=use_route_pack,
+                zero_material_qdata=use_zero_material_qdata,
+            )
+            reduce_workspace = self._get_reduce_workspace(
+                dispatched.x.shape[0], dispatched.x.device, enabled=use_reduce
+            )
+            local_reduced = local_mxfp8_experts(
+                dispatched,
+                self.c_fc.weight,
+                self.c_fc.bias,
+                self.c_proj.weight,
+                self.c_proj.bias,
+                self.activation_function,
+                self._mxfp8_workspace,
+                is_inference_mode=expert_inference,
+                route_workspace=route_workspace,
+                reduce_workspace=reduce_workspace,
+                zero_material_qdata=use_zero_material_qdata,
+            )
+        else:
+            dispatched = dispatch_bf16(x, plan, self.process_group)
+            local_reduced = local_bf16_experts(
+                dispatched,
+                self.c_fc.weight,
+                self.c_fc.bias,
+                self.c_proj.weight,
+                self.c_proj.bias,
+                self.activation_function,
+                is_inference_mode=expert_inference,
+            )
         output = combine_expert_parallel(
             local_reduced, plan, x.shape[0], self.process_group
         ).view(original_shape)
 
-        aux_loss = None
-        if not is_inference_mode:
+        if not is_inference_mode and aux_loss is None:
             expert_frequency = torch.bincount(
                 topk_indices.reshape(-1).to(torch.int64),
                 minlength=self.num_experts,
@@ -310,9 +497,13 @@ class ExpertParallelMoE(nn.Module):
         return (
             f"global_experts={self.num_experts}, local_experts={self.local_experts}, "
             f"top_k={self.top_k}, ep_rank={self.ep_rank}, ep_size={self.ep_size}, "
+            f"expert_backend={self.expert_backend.value}, "
             f"fused_transport={self.use_fused_transport}, "
             f"fused_route_pack={self.use_fused_route_pack}, "
-            f"fused_reduce={self.use_fused_reduce}"
+            f"fused_reduce={self.use_fused_reduce}, "
+            f"route_pack_min_elements={self.route_pack_min_elements}, "
+            f"zero_material_qdata={self.use_zero_material_qdata}, "
+            f"comm_overlap={self.use_comm_overlap}"
         )
 
 
