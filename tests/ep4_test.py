@@ -30,7 +30,8 @@ def _distributed_group():
     if torch.cuda.get_device_properties(local_rank).major != 10:
         pytest.skip("EP4 MXFP8 tests require SM100 GPUs")
     yield
-    dist.barrier()
+    # No teardown barrier: synchronized assertions above already give peers a
+    # coherent failure, while an extra barrier can mask the original traceback.
     dist.destroy_process_group()
 
 
@@ -38,6 +39,15 @@ def _relative_l2(actual: torch.Tensor, expected: torch.Tensor) -> float:
     numerator = (actual.float() - expected.float()).norm()
     denominator = expected.float().norm().clamp_min(1e-7)
     return (numerator / denominator).item()
+
+
+def _assert_all_ranks(condition: bool, message: str, device: torch.device) -> None:
+    """Fail a distributed test coherently instead of stranding peers in NCCL."""
+    local = torch.tensor([condition], dtype=torch.uint8, device=device)
+    gathered = [torch.empty_like(local) for _ in range(dist.get_world_size())]
+    dist.all_gather(gathered, local)
+    failing = [rank for rank, value in enumerate(gathered) if not bool(value.item())]
+    assert not failing, f"{message}; failing ranks: {failing}"
 
 
 def _full_model(*, bias: bool, training: bool = True) -> MoE:
@@ -100,9 +110,7 @@ def test_ep4_forward_backward_and_all_gradients():
         device=x_ref.device,
     )
 
-    expected, aux_ref = full(
-        x_ref, kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8
-    )
+    expected, aux_ref = full(x_ref, kernel_backend_moe=KernelBackendMoE.sonicmoe_mxfp8)
     actual, aux_ep = ep(x_ep)
     assert _relative_l2(actual, expected) < 0.10
     loss_ref = (expected * grad).float().sum() + 0.01 * aux_ref.float()
@@ -141,15 +149,31 @@ def test_ep4_empty_destination_ranks_and_optimizer_steps():
         x[:, 0] = 1.0 + 0.1 * step
         output, aux_loss = ep(x)
         loss = output.float().sum() + 0.01 * aux_loss.float()
-        assert torch.isfinite(loss)
+        _assert_all_ranks(
+            bool(torch.isfinite(loss).item()),
+            f"step {step} produced a non-finite loss",
+            initial.device,
+        )
         loss.backward()
-        assert all(
-            parameter.grad is not None and torch.isfinite(parameter.grad).all()
+        gradients_ok = all(
+            parameter.grad is not None
+            and bool(torch.isfinite(parameter.grad).all().item())
             for parameter in ep.parameters()
         )
+        _assert_all_ranks(
+            gradients_ok,
+            f"step {step} produced a missing or non-finite gradient",
+            initial.device,
+        )
         optimizer.step()
-    if dist.get_rank() == 0:
-        assert not torch.equal(ep.c_fc.weight, initial)
+    delta = (ep.c_fc.weight.float() - initial.float()).abs().max()
+    rank_zero_delta = delta if dist.get_rank() == 0 else torch.zeros_like(delta)
+    dist.broadcast(rank_zero_delta, src=0)
+    _assert_all_ranks(
+        rank_zero_delta.item() > 0,
+        "rank 0 expert weights did not update",
+        initial.device,
+    )
 
 
 def test_replicated_router_gradient_sync():

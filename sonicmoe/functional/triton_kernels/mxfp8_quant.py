@@ -1293,6 +1293,8 @@ def _dense_dual_sgd_kernel(
         (aux2_value - learning_rate * aux2_grad).to(tl.bfloat16),
         mask=aux2_mask,
     )
+
+
 @triton.jit
 def _rowwise_linear_kernel(
     x_ptr,
@@ -1306,9 +1308,7 @@ def _rowwise_linear_kernel(
     k_tile = tl.program_id(1)
     offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
     mask = (row < M) & (offsets < K)
-    values = tl.load(x_ptr + row * K + offsets, mask=mask, other=0.0).to(
-        tl.float32
-    )
+    values = tl.load(x_ptr + row * K + offsets, mask=mask, other=0.0).to(tl.float32)
     groups = tl.reshape(values, [BLOCK_K // 32, 32])
     amax = tl.max(tl.abs(groups), axis=1)
     scale_byte, scale = _rceil_e8m0(amax)
@@ -1331,6 +1331,8 @@ def _rowwise_dequant_kernel(
     q_ptr,
     sf_ptr,
     out_ptr,
+    q_stride_m,
+    sf_stride_m,
     M: tl.constexpr,
     K: tl.constexpr,
     BLOCK_K: tl.constexpr,
@@ -1340,7 +1342,7 @@ def _rowwise_dequant_kernel(
     offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
     mask = (row < M) & (offsets < K)
     scale_byte = tl.load(
-        sf_ptr + row * (K // 32) + offsets // 32,
+        sf_ptr + row * sf_stride_m + offsets // 32,
         mask=mask,
         other=1,
     ).to(tl.int32)
@@ -1349,7 +1351,7 @@ def _rowwise_dequant_kernel(
     # format's zero-group semantics while avoiding a flushed subnormal.
     scale_bits = tl.maximum(scale_byte, 1) << 23
     scale = scale_bits.to(tl.float32, bitcast=True)
-    values = tl.load(q_ptr + row * K + offsets, mask=mask, other=0.0).to(
+    values = tl.load(q_ptr + row * q_stride_m + offsets, mask=mask, other=0.0).to(
         tl.float32
     )
     tl.store(out_ptr + row * K + offsets, values * scale, mask=mask)
@@ -1462,12 +1464,18 @@ def dequantize_mxfp8_rows(
         raise TypeError("scale must have shape (M, K / 32) and E8M0/uint8 dtype")
     if dtype not in (torch.bfloat16, torch.float32):
         raise TypeError("dequantized rows must use BF16 or FP32")
+    if qdata.stride(1) != 1 or scale.stride(1) != 1:
+        raise ValueError("qdata and scale rows must have unit inner stride")
     result = (
         torch.empty((rows, cols), dtype=dtype, device=qdata.device)
         if out is None
         else out
     )
-    if result.shape != qdata.shape or result.dtype != dtype or not result.is_contiguous():
+    if (
+        result.shape != qdata.shape
+        or result.dtype != dtype
+        or not result.is_contiguous()
+    ):
         raise ValueError("out must be contiguous with the requested shape and dtype")
     if scale.device != qdata.device or result.device != qdata.device:
         raise ValueError("qdata, scale, and out must be on the same device")
@@ -1477,6 +1485,8 @@ def dequantize_mxfp8_rows(
             qdata,
             scale.view(torch.uint8),
             result,
+            qdata.stride(0),
+            scale.stride(0),
             M=rows,
             K=cols,
             BLOCK_K=block_k,

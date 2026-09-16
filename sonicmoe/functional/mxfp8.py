@@ -943,10 +943,38 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
         activation_type: ActivationType,
         is_inference_mode: bool,
         scores_are_grouped: bool,
+        prepacked_qdata: torch.Tensor | None,
+        prepacked_scale: torch.Tensor | None,
     ) -> torch.Tensor:
         experts, hidden, intermediate = _require_supported(x, w1, w2, activation_type)
         total_m = x_gather_idx.numel()
-        if (
+        if (prepacked_qdata is None) != (prepacked_scale is None):
+            raise ValueError(
+                "prepacked MXFP8 values and scales must be provided together"
+            )
+        if prepacked_qdata is not None:
+            if prepacked_qdata.shape != (total_m, hidden):
+                raise ValueError(
+                    "prepacked MXFP8 values do not match routed input shape"
+                )
+            x_mx = BlockScaledOperand.from_parts(
+                prepacked_qdata,
+                prepacked_scale,
+                MXFP8_E4M3,
+                orig_dtype=x.dtype,
+            )
+            x_wgrad_mx = (
+                quantize_mxfp8_varlen_k(
+                    x,
+                    expert_offsets,
+                    gather_idx=x_gather_idx,
+                )
+                if not is_inference_mode
+                and workspace.training_policy.fc1_wgrad == "mxfp8"
+                else None
+            )
+            fc1_a_idx = None
+        elif (
             _FUSE_VARLEN_DUAL
             and not is_inference_mode
             and workspace.training_policy.fc1_wgrad == "mxfp8"
@@ -1560,7 +1588,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             dw2,
             db2,
             dtopk_scores,
-            *[None] * 11,
+            *[None] * 13,
         )
 
 
@@ -1582,6 +1610,7 @@ def mxfp8_experts(
     activation_type: ActivationType,
     is_inference_mode: bool,
     scores_are_grouped: bool = False,
+    prepacked_input: BlockScaledOperand | None = None,
 ) -> torch.Tensor:
     workspace = Mxfp8Workspace() if workspace is None else workspace
     return _Mxfp8ExpertsFunction.apply(
@@ -1602,6 +1631,8 @@ def mxfp8_experts(
         activation_type,
         is_inference_mode,
         scores_are_grouped,
+        None if prepacked_input is None else prepacked_input.qdata,
+        None if prepacked_input is None else prepacked_input.scale,
     )
 
 
