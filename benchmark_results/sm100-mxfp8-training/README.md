@@ -64,12 +64,12 @@ inside a 12-iteration `BENCH` range.
 | Implementation | B200 SMs | GPU projection | Peak allocated |
 |---|---:|---:|---:|
 | Public fixed-commit recorded result | 148 | 2659.8 us | not reported here |
-| This branch, experimental flags | 148 | 2629.3 us | 3466 MiB |
+| This branch, experimental flags | 148 | 2630.2 us | 3466 MiB |
 
-The measured lead over the public recorded value is about `1.15%`. Three
-fresh-process CUDA-event p50s were `2629.95`, `2631.84`, and `2630.98 us`.
-The profile is `profiles/s7_supersonic_scope_faster_experimental.nsys-rep` in
-the paired workspace.
+The measured lead over the public recorded value is about `1.13%`. The final
+profile is `profiles/s8_supersonic_scope_final.nsys-rep` in the paired
+workspace. CUDA-event latency is retained as a diagnostic but is not used for
+this comparison because it also includes host launch gaps.
 
 This is not the standard OCP correctness mode. It explicitly enables iso32
 for all dual activation casts and a finite-BF16-only fast RCEIL conversion:

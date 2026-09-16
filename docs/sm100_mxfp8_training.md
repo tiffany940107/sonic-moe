@@ -270,10 +270,10 @@ their defaults remain `64`, `4`, and `1` respectively.
 On an NVIDIA B200 with 148 SMs, shape
 `T=8192,E=8,K=8,H=3072,I=1536`, and the same nsys merged GPU-projection method
 used by public `PFCCLab/supersonic-moe@76b4f4f`, this configuration measured
-`2629.3 us` per forward+backward iteration. Three fresh-process CUDA-event p50s
-were `2629.95`, `2631.84`, and `2630.98 us`. The fixed public commit records
-`2659.8 us`, so the measured lead is about 1.15%. Peak allocated memory was
-about 3466 MiB.
+`2630.2 us` per forward+backward iteration. The fixed public commit records
+`2659.8 us`, so the measured lead is about 1.13%. Peak allocated memory was
+about 3466 MiB. CUDA-event latency is diagnostic only here because it also
+includes host launch gaps; the comparison uses merged GPU busy intervals.
 
 The comparison uses the same GPU class/SM count, shape, local-expert scope, hot
 weight cache, FP32 wgrad accumulation, iteration count, and GPU-projection

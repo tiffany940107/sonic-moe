@@ -124,7 +124,7 @@ gradient and TMA reduce-add path. `auto` and `0` keep ordinary BF16 expert
 gradient-accumulation case was slower and used more memory. See the guide for
 the accumulation lifecycle and benchmark flags.
 
-An additional opt-in research configuration reaches `2629.3 us` nsys GPU
+An additional opt-in research configuration reaches `2630.2 us` nsys GPU
 projection on B200 for the public SuperSonic reference shape
 `T=8192,E=8,K=8,H=3072,I=1536`, versus the fixed public commit's recorded
 `2659.8 us`. It uses non-standard iso32 scale sharing and a finite-input fast
