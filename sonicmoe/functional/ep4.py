@@ -12,6 +12,7 @@ import torch.distributed as dist
 
 from ..enums import ActivationType
 from . import moe_general_routing_inputs
+from . import overlap as _overlap
 from .mxfp8 import Mxfp8Workspace, mxfp8_experts
 from .mxfp8_route_pack import Mxfp8RoutePackWorkspace, route_pack_mxfp8
 from .mxfp8_transport import (
@@ -21,6 +22,7 @@ from .mxfp8_transport import (
 )
 from .mxfp8_weighted_reduce import (
     Mxfp8WeightedReduceWorkspace,
+    segmented_sum_rows_mxfp8,
     segmented_weighted_reduce_mxfp8,
 )
 from .triton_kernels import (
@@ -73,6 +75,98 @@ class Bf16Dispatched:
     weights: torch.Tensor
 
 
+class _GatherPairRows(torch.autograd.Function):
+    """``x.index_select(0, recv_token)`` with an atomic-free exact backward.
+
+    The default backward is ``index_add_`` over ``pair_count`` rows, which on
+    large shapes (E384/K20/EP8, ~1.2M pair rows) falls onto PyTorch's slow
+    64-bit-offset atomic path.  The grouped layout already records, per receive
+    token, where its top-k rows live (``scatter_pos``), so the gradient is a
+    deterministic segmented sum.
+    """
+
+    @staticmethod
+    def forward(ctx, x, recv_token, scatter_pos, recv_tokens, top_k):
+        ctx.save_for_backward(scatter_pos)
+        ctx.recv_tokens = recv_tokens
+        ctx.top_k = top_k
+        return x.index_select(0, recv_token)
+
+    @staticmethod
+    def backward(ctx, grad_pair):
+        (scatter_pos,) = ctx.saved_tensors
+        grad_x = segmented_sum_rows_mxfp8(
+            grad_pair, scatter_pos, ctx.recv_tokens, ctx.top_k
+        )
+        return grad_x, None, None, None, None
+
+
+import os as _os
+
+_SEGSUM = _os.environ.get("SONICMOE_EP_SEGSUM_DISPATCH_BWD", "1") != "0"
+
+
+def _sum_rows_by_destination(rows, send_indices, counts, source_tokens):
+    """Sum per-destination returned rows into ``[source_tokens, H]`` (atomic-free).
+
+    ``send_indices`` is the destination-major concatenation of the tokens sent
+    to every rank (each token at most once per destination) and ``counts`` the
+    per-destination lengths.  One position table + one segmented FP32 reduction
+    replaces the per-destination index_copy_/index_select/add loop.
+    """
+    world = len(counts)
+    device = rows.device
+    n = rows.shape[0]
+    if n == 0 or source_tokens == 0:
+        return torch.zeros(
+            (source_tokens, rows.shape[1]), dtype=rows.dtype, device=device
+        )
+    segment = torch.repeat_interleave(
+        torch.arange(world, dtype=torch.int64, device=device),
+        torch.tensor(counts, dtype=torch.int64, device=device),
+        output_size=n,
+    )
+    position = torch.full(
+        (source_tokens * world,), -1, dtype=torch.int32, device=device
+    )
+    position[send_indices.to(torch.int64) * world + segment] = torch.arange(
+        n, dtype=torch.int32, device=device
+    )
+    return segmented_sum_rows_mxfp8(rows, position, source_tokens, world)
+
+
+def _accumulate_dedup_segments(
+    grad_x: torch.Tensor,
+    send_indices: torch.Tensor,
+    rows: torch.Tensor,
+    splits,
+) -> None:
+    """Add returned rows into ``grad_x`` without atomics.
+
+    ``send_indices`` is the concatenation, per destination rank, of the
+    ascending and duplicate-free token ids of that destination (the dispatch
+    plan deduplicates each token once per destination), and ``splits`` are the
+    per-destination row counts.  Indices are therefore unique inside a segment,
+    so each segment can be applied as a gather-add-scatter.  This replaces
+    ``index_add_`` on the (strided) returned payload, which takes PyTorch's slow
+    generic atomic path.
+    """
+    start = 0
+    first = True
+    for count in splits:
+        count = int(count)
+        if count:
+            index = send_indices[start : start + count]
+            segment = rows[start : start + count]
+            if first:
+                # grad_x is freshly zeroed, so the first segment is a plain write.
+                grad_x.index_copy_(0, index, segment)
+                first = False
+            else:
+                grad_x.index_copy_(0, index, grad_x.index_select(0, index) + segment)
+        start += count
+
+
 def _all_to_all_rows_raw(
     tensor: torch.Tensor,
     input_splits: tuple[int, ...],
@@ -102,16 +196,21 @@ class _AllToAllRows(torch.autograd.Function):
         ctx.input_splits = input_splits
         ctx.output_splits = output_splits
         ctx.group = group
-        return _all_to_all_rows_raw(tensor, input_splits, output_splits, group)
+        _overlap.fire("pre:fwd_combine")
+        out = _all_to_all_rows_raw(tensor, input_splits, output_splits, group)
+        _overlap.fire("post:fwd_combine")
+        return out
 
     @staticmethod
     def backward(ctx, grad_output):
+        _overlap.fire("pre:bwd_combine")
         grad_input = _all_to_all_rows_raw(
             grad_output,
             ctx.output_splits,
             ctx.input_splits,
             ctx.group,
         )
+        _overlap.fire("post:bwd_combine")
         return grad_input, None, None, None
 
 
@@ -132,9 +231,11 @@ class _Mxfp8Dispatch(torch.autograd.Function):
         qdata, scale = quantize_mxfp8_rows(x.contiguous())
         send_qdata = qdata.index_select(0, send_indices)
         send_scale = scale.index_select(0, send_indices)
+        _overlap.fire("pre:fwd_dispatch")
         recv_qdata = _all_to_all_rows_raw(
             send_qdata.view(torch.uint8), input_splits, output_splits, group
         ).view(qdata.dtype)
+        _overlap.fire("post:fwd_dispatch")
         recv_scale = _all_to_all_rows_raw(
             send_scale.view(torch.uint8), input_splits, output_splits, group
         ).view(scale.dtype)
@@ -170,18 +271,27 @@ class _Mxfp8Dispatch(torch.autograd.Function):
             ctx.input_splits,
             ctx.group,
         )
+        _overlap.fire("pre:bwd_dispatch")
         grad_send = _all_to_all_rows_raw(
             grad_recv_x,
             ctx.output_splits,
             ctx.input_splits,
             ctx.group,
         )
-        grad_x = torch.zeros(
-            (ctx.source_tokens, grad_send.shape[1]),
-            dtype=grad_send.dtype,
-            device=grad_send.device,
-        )
-        grad_x.index_add_(0, send_indices, grad_send)
+        _overlap.fire("post:bwd_dispatch")
+        if _SEGSUM and grad_send.dtype == torch.bfloat16 and grad_send.is_cuda:
+            grad_x = _sum_rows_by_destination(
+                grad_send, send_indices, ctx.input_splits, ctx.source_tokens
+            )
+        else:
+            grad_x = torch.zeros(
+                (ctx.source_tokens, grad_send.shape[1]),
+                dtype=grad_send.dtype,
+                device=grad_send.device,
+            )
+            _accumulate_dedup_segments(
+                grad_x, send_indices, grad_send, ctx.input_splits
+            )
         return grad_x, None, grad_send_weights, None, None, None, None
 
 
@@ -235,7 +345,7 @@ class _Bf16Dispatch(torch.autograd.Function):
             dtype=returned_x.dtype,
             device=returned_x.device,
         )
-        grad_x.index_add_(0, send_indices, returned_x)
+        _accumulate_dedup_segments(grad_x, send_indices, returned_x, ctx.input_splits)
         return grad_x, None, None, returned_weights, None, None, None
 
 
@@ -264,9 +374,11 @@ class _PackedMxfp8Dispatch(torch.autograd.Function):
                 send_expert_ids,
                 send_weights,
             )
+            _overlap.fire("pre:fwd_dispatch")
             recv_payload = _all_to_all_rows_raw(
                 send_payload, input_splits, output_splits, group
             )
+            _overlap.fire("post:fwd_dispatch")
             recv_qdata, recv_scale, _recv_ids, payload_weights = unpack_mxfp8_transport(
                 recv_payload, layout
             )
@@ -324,20 +436,29 @@ class _PackedMxfp8Dispatch(torch.autograd.Function):
             payload_x.copy_(grad_recv_x)
             payload_weights.copy_(grad_recv_weights)
 
+            _overlap.fire("pre:bwd_dispatch")
             returned_payload = _all_to_all_rows_raw(
                 grad_payload,
                 ctx.output_splits,
                 ctx.input_splits,
                 ctx.group,
             )
+            _overlap.fire("post:bwd_dispatch")
             returned_x = returned_payload[:, :grad_x_bytes].view(grad_recv_x.dtype)
             returned_weights = returned_payload[:, grad_x_bytes:].view(torch.float32)
-            grad_x = torch.zeros(
-                (ctx.source_tokens, ctx.hidden),
-                dtype=grad_recv_x.dtype,
-                device=grad_recv_x.device,
-            )
-            grad_x.index_add_(0, send_indices, returned_x)
+            if _SEGSUM and returned_x.dtype == torch.bfloat16 and returned_x.is_cuda:
+                grad_x = _sum_rows_by_destination(
+                    returned_x, send_indices, ctx.input_splits, ctx.source_tokens
+                )
+            else:
+                grad_x = torch.zeros(
+                    (ctx.source_tokens, ctx.hidden),
+                    dtype=grad_recv_x.dtype,
+                    device=grad_recv_x.device,
+                )
+                _accumulate_dedup_segments(
+                    grad_x, send_indices, returned_x, ctx.input_splits
+                )
             return grad_x, returned_weights
 
         if ctx.comm_stream is None:
@@ -372,6 +493,41 @@ def _exchange_counts(
     return tuple(int(value) for value in recv.cpu().tolist())
 
 
+def _build_send_chunks(valid, destinations, local_ids, weights, world):
+    """Per-destination deduplicated send lists with a single host sync.
+
+    Token ``t`` is sent once to every destination that owns at least one of its
+    valid experts.  The destination-major, token-ascending flat order equals the
+    concatenation of per-destination ``torch.where`` lists.  Only the per
+    destination counts are copied to the host (needed for the NCCL splits); the
+    flat token list is then cut by a stable sort, so no ``nonzero`` sync.
+    """
+    tokens = valid.shape[0]
+    device = valid.device
+    ranks = torch.arange(world, dtype=destinations.dtype, device=device)
+    mask = ((destinations.unsqueeze(-1) == ranks) & valid.unsqueeze(-1)).any(dim=1)
+    mask_t = mask.t().contiguous().reshape(-1)  # [world * tokens], destination-major
+    counts = tuple(int(c) for c in mask_t.view(world, tokens).sum(dim=1).tolist())
+    total = sum(counts)
+    order = torch.sort(mask_t.to(torch.uint8), descending=True, stable=True)[1][:total]
+    token = order % tokens
+    destination = (order // tokens).to(destinations.dtype)
+    selected_mask = (destinations.index_select(0, token) == destination.unsqueeze(1)) & (
+        valid.index_select(0, token)
+    )
+    selected_ids = torch.where(
+        selected_mask,
+        local_ids.index_select(0, token),
+        torch.full_like(selected_mask, -1, dtype=local_ids.dtype),
+    ).to(torch.int32)
+    selected_weights = torch.where(
+        selected_mask,
+        weights.index_select(0, token),
+        torch.zeros_like(weights.index_select(0, token)),
+    )
+    return counts, token, selected_ids, selected_weights
+
+
 def make_expert_parallel_dispatch_plan(
     expert_ids: torch.Tensor,
     weights: torch.Tensor,
@@ -404,40 +560,17 @@ def make_expert_parallel_dispatch_plan(
     safe_ids = ids.clamp_min(0)
     destinations = expert_to_rank.index_select(0, safe_ids.reshape(-1)).view_as(ids)
     local_ids = expert_to_local.index_select(0, safe_ids.reshape(-1)).view_as(ids)
-    token_chunks = []
-    id_chunks = []
-    weight_chunks = []
-    send_counts = []
-    for destination in range(world):
-        route_mask = valid & (destinations == destination)
-        token_indices = torch.where(route_mask.any(dim=1))[0]
-        selected_mask = route_mask.index_select(0, token_indices)
-        selected_ids = local_ids.index_select(0, token_indices)
-        selected_weights = weights.index_select(0, token_indices)
-        token_chunks.append(token_indices)
-        id_chunks.append(
-            torch.where(
-                selected_mask,
-                selected_ids,
-                torch.full_like(selected_ids, -1),
-            ).to(torch.int32)
-        )
-        weight_chunks.append(
-            torch.where(
-                selected_mask, selected_weights, torch.zeros_like(selected_weights)
-            )
-        )
-        send_counts.append(token_indices.numel())
-
-    send_counts_tuple = tuple(send_counts)
+    send_counts_tuple, token_flat, send_ids, send_weights = _build_send_chunks(
+        valid, destinations, local_ids, weights, world
+    )
     recv_counts = _exchange_counts(send_counts_tuple, expert_ids.device, group)
     return ExpertParallelDispatchPlan(
         send_counts=send_counts_tuple,
         recv_counts=recv_counts,
-        send_token_indices=tuple(token_chunks),
-        send_token_indices_flat=torch.cat(token_chunks).to(torch.int64),
-        send_expert_ids=torch.cat(id_chunks).contiguous(),
-        send_weights=torch.cat(weight_chunks).contiguous(),
+        send_token_indices=tuple(torch.split(token_flat, send_counts_tuple)),
+        send_token_indices_flat=token_flat,
+        send_expert_ids=send_ids.contiguous(),
+        send_weights=send_weights.contiguous(),
     )
 
 
@@ -589,7 +722,11 @@ def local_mxfp8_experts(
     recv_tokens, top_k = dispatched.expert_ids.shape
     hidden = dispatched.x.shape[1]
     valid = dispatched.expert_ids >= 0
-    pair_count = int(valid.sum().item())
+    # One nonzero (the only host sync of this path) provides the pair count and
+    # every compaction index below; boolean-mask indexing would sync each time.
+    valid_flat = valid.reshape(-1)
+    valid_index = torch.nonzero(valid_flat).squeeze(1)
+    pair_count = valid_index.numel()
     if pair_count == 0:
         if is_inference_mode:
             return torch.zeros(
@@ -610,13 +747,8 @@ def local_mxfp8_experts(
             (recv_tokens, hidden), dtype=dispatched.x.dtype, device=dispatched.x.device
         ) + (parameter_zero + transport_zero).to(dispatched.x.dtype)
 
-    recv_rows = (
-        torch.arange(recv_tokens, dtype=torch.int64, device=dispatched.x.device)
-        .unsqueeze(1)
-        .expand(-1, top_k)
-    )
-    compact_recv_token = recv_rows[valid].contiguous()
-    compact_weights = dispatched.weights[valid].contiguous()
+    compact_recv_token = valid_index // top_k
+    compact_weights = dispatched.weights.reshape(-1).index_select(0, valid_index)
 
     local_experts = w2.shape[0]
     prepacked_input = None
@@ -624,7 +756,9 @@ def local_mxfp8_experts(
         pair_x = dispatched.x.index_select(0, compact_recv_token)
         pair_recv_token = compact_recv_token
         pair_weights = compact_weights
-        pair_expert = dispatched.expert_ids[valid].contiguous().view(-1, 1)
+        pair_expert = (
+            dispatched.expert_ids.reshape(-1).index_select(0, valid_index).view(-1, 1)
+        )
         expert_frequency = torch.empty(
             local_experts, dtype=torch.int32, device=dispatched.x.device
         )
@@ -663,15 +797,27 @@ def local_mxfp8_experts(
             materialize_qdata=not zero_material_qdata,
         )
         expert_offsets = packed.indptr
-        compact_to_grouped = packed.scatter_pos[valid.reshape(-1)].contiguous()
+        compact_to_grouped = packed.scatter_pos.index_select(0, valid_index)
         grouped_to_compact = torch.empty_like(compact_to_grouped)
         grouped_to_compact.scatter_(
             0,
             compact_to_grouped.to(torch.int64),
             torch.arange(pair_count, dtype=torch.int32, device=dispatched.x.device),
         )
+        # Training with BF16 token-space activations: do not materialise the
+        # [pair_count, hidden] gather.  The expert function gathers its FC1
+        # wgrad operand from ``dispatched.x`` by ``packed.recv_token`` and
+        # reduces ``dx`` per token with ``packed.scatter_pos``.
+        token_space_x = (
+            not is_inference_mode
+            and dispatched.x.dtype == torch.bfloat16
+            and packed.recv_token.dtype == torch.int32
+            and packed.scatter_pos.dtype == torch.int32
+        )
         pair_x = (
-            torch.empty(
+            dispatched.x
+            if token_space_x
+            else torch.empty(
                 (pair_count, hidden),
                 dtype=dispatched.x.dtype,
                 device=dispatched.x.device,
@@ -692,6 +838,14 @@ def local_mxfp8_experts(
         s_scatter_idx = identity
         s_reverse_scatter_idx = identity
         prepacked_input = packed.operand
+    token_space_kwargs = {}
+    if route_workspace is not None and token_space_x:
+        token_space_kwargs = dict(
+            wgrad_row_index=packed.recv_token,
+            dx_scatter_pos=packed.scatter_pos,
+            dx_recv_tokens=recv_tokens,
+            dx_top_k=top_k,
+        )
     pair_output = mxfp8_experts(
         pair_x,
         w1.permute(1, 2, 0),
@@ -712,6 +866,8 @@ def local_mxfp8_experts(
         scores_are_grouped=True,
         prepacked_input=prepacked_input,
         prepacked_a_idx=None if route_workspace is None else packed.a_idx,
+        identity_reduce=route_workspace is not None,
+        **token_space_kwargs,
     )
     if route_workspace is not None and reduce_workspace is not None:
         return segmented_weighted_reduce_mxfp8(
@@ -734,6 +890,40 @@ def local_mxfp8_experts(
     return reduced.to(dispatched.x.dtype)
 
 
+class _CombineRows(torch.autograd.Function):
+    """Sum the per-destination returned rows into source tokens, atomic-free.
+
+    Equivalent to the FP32 ``index_add_`` loop over destinations followed by a
+    cast to the input dtype, with one deterministic segmented reduction.  Each
+    token appears at most once per destination, so a ``[tokens, world]`` table
+    of returned-row positions is enough.
+    """
+
+    @staticmethod
+    def forward(ctx, returned, send_token_indices_flat, send_counts, source_tokens):
+        world = len(send_counts)
+        device = returned.device
+        rows = returned.shape[0]
+        segment = torch.repeat_interleave(
+            torch.arange(world, dtype=torch.int64, device=device),
+            torch.tensor(send_counts, dtype=torch.int64, device=device),
+            output_size=rows,
+        )
+        position = torch.full(
+            (source_tokens * world,), -1, dtype=torch.int32, device=device
+        )
+        position[send_token_indices_flat * world + segment] = torch.arange(
+            rows, dtype=torch.int32, device=device
+        )
+        ctx.save_for_backward(send_token_indices_flat)
+        return segmented_sum_rows_mxfp8(returned, position, source_tokens, world)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        (send_token_indices_flat,) = ctx.saved_tensors
+        return grad_output.index_select(0, send_token_indices_flat), None, None, None
+
+
 def combine_expert_parallel(
     local_reduced: torch.Tensor,
     plan: ExpertParallelDispatchPlan,
@@ -744,6 +934,13 @@ def combine_expert_parallel(
     returned = _AllToAllRows.apply(
         local_reduced, plan.recv_counts, plan.send_counts, group
     )
+    if returned.dtype == torch.bfloat16 and returned.is_cuda:
+        return _CombineRows.apply(
+            returned,
+            plan.send_token_indices_flat,
+            tuple(plan.send_counts),
+            source_tokens,
+        )
     output = torch.zeros(
         (source_tokens, returned.shape[1]),
         dtype=torch.float32,

@@ -280,6 +280,57 @@ def test_ep4_auto_route_pack_crossover():
     )
 
 
+def test_ep4_auto_transport_crossover():
+    full = _full_model(bias=False, training=True)
+    ep = ExpertParallelMoE.from_moe(full, unfused_transport_min_elements=2_000)
+    forced_fused = ExpertParallelMoE.from_moe(
+        full, use_fused_transport=True, unfused_transport_min_elements=2_000
+    )
+    ep(_rank_input(13))
+    small_fused = ep._last_fused_transport
+    ep(_rank_input(17))
+    large_fused = ep._last_fused_transport
+    forced_fused(_rank_input(17))
+    forced_large_fused = forced_fused._last_fused_transport
+    with torch.inference_mode():
+        ep.eval()
+        ep(_rank_input(17), is_inference_mode=True)
+        inference_fused = ep._last_fused_transport
+    _assert_all_ranks(
+        small_fused and not large_fused and forced_large_fused and inference_fused,
+        "auto transport selection must be fused for small/inference inputs, "
+        "unfused for large training inputs, and respect explicit overrides",
+        full.c_fc.weight.device,
+    )
+
+
+def test_ep4_unfused_transport_matches_fused_training():
+    full = _full_model(bias=True)
+    fused = ExpertParallelMoE.from_moe(full, use_fused_transport=True)
+    unfused = ExpertParallelMoE.from_moe(full, use_fused_transport=False)
+    x_fused = _rank_input(53, requires_grad=True)
+    x_unfused = x_fused.detach().clone().requires_grad_()
+    generator = torch.Generator(device=x_fused.device).manual_seed(2300 + dist.get_rank())
+    grad = torch.randn(
+        x_fused.shape, generator=generator, dtype=x_fused.dtype, device=x_fused.device
+    )
+    out_fused, aux_fused = fused(x_fused)
+    out_unfused, aux_unfused = unfused(x_unfused)
+    ((out_fused * grad).float().sum() + 0.01 * aux_fused.float()).backward()
+    ((out_unfused * grad).float().sum() + 0.01 * aux_unfused.float()).backward()
+    assert _relative_l2(out_unfused, out_fused) < 1e-3
+    assert _relative_l2(x_unfused.grad, x_fused.grad) < 1e-3
+    assert _relative_l2(unfused.router.weight.grad, fused.router.weight.grad) < 1e-3
+    for a, b in (
+        (unfused.c_fc.weight, fused.c_fc.weight),
+        (unfused.c_fc.bias, fused.c_fc.bias),
+        (unfused.c_proj.weight, fused.c_proj.weight),
+        (unfused.c_proj.bias, fused.c_proj.bias),
+    ):
+        assert torch.isfinite(a.grad).all()
+        assert _relative_l2(a.grad, b.grad) < 1e-3
+
+
 def test_ep4_collective_placement_migration_preserves_output():
     full = _full_model(bias=True, training=False)
     ep = ExpertParallelMoE.from_moe(

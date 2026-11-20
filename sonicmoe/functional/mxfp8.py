@@ -47,12 +47,37 @@ from .triton_kernels.mxfp8_quant import (
 
 _SF_ATOM_M = 128
 _SF_ATOM_K = 4 * MXFP8_E4M3.sf_vec_size
-_AUTOTUNE = os.environ.get("SONICMOE_MXFP8_AUTOTUNE", "0") == "1"
+_AUTOTUNE_MODE = os.environ.get("SONICMOE_MXFP8_AUTOTUNE", "auto")
+
+
+def _autotune_enabled(total_m: int, experts: int) -> bool:
+    """Autotune the grouped GEMMs in the large-token regime.
+
+    Quack picks 256x256 / 256x512 2-CTA tiles there (the default config is
+    smaller); results are cached on disk per shape, so the tuning cost is paid
+    once.  "0"/"1" force it off/on; "auto" (default) enables it once every
+    expert has at least ``SONICMOE_MXFP8_FC1_AUTO_MIN_ROWS`` rows.
+    """
+    if _AUTOTUNE_MODE in ("0", "1"):
+        return _AUTOTUNE_MODE == "1"
+    return total_m >= experts * int(
+        os.environ.get("SONICMOE_MXFP8_FC1_AUTO_MIN_ROWS", "2048")
+    )
 _FC1_TILE_M = int(os.environ.get("SONICMOE_MXFP8_FC1_TILE_M", "128"))
 _FC1_TILE_N = int(os.environ.get("SONICMOE_MXFP8_FC1_TILE_N", "256"))
 _FC1_CLUSTER_M = int(os.environ.get("SONICMOE_MXFP8_FC1_CLUSTER_M", "1"))
 _FC1_CLUSTER_N = int(os.environ.get("SONICMOE_MXFP8_FC1_CLUSTER_N", "1"))
 _FC1_DYNAMIC = os.environ.get("SONICMOE_MXFP8_FC1_DYNAMIC", "1") == "1"
+# Unless the user pins the FC1 tile, use the 2-CTA 256x256 tile (cluster_M=2) once
+# every expert has enough rows: measured -2 ms forward at EP8 T=61440 (tpe 25600).
+_FC1_AUTO_TILE = (
+    "SONICMOE_MXFP8_FC1_TILE_M" not in os.environ
+    and "SONICMOE_MXFP8_FC1_CLUSTER_M" not in os.environ
+    and "SONICMOE_MXFP8_FC1_TILE_N" not in os.environ
+)
+_FC1_AUTO_MIN_ROWS_PER_EXPERT = int(
+    os.environ.get("SONICMOE_MXFP8_FC1_AUTO_MIN_ROWS", "2048")
+)
 _FC1_TMA_GATHER = os.environ.get("SONICMOE_MXFP8_FC1_TMA_GATHER", "1") == "1"
 _FUSE_DGATED_QUANT = os.environ.get("SONICMOE_MXFP8_FUSE_DGATED_QUANT", "1") == "1"
 _FUSE_VARLEN_DUAL = os.environ.get("SONICMOE_MXFP8_FUSE_VARLEN_DUAL", "1") == "1"
@@ -946,9 +971,23 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
         prepacked_qdata: torch.Tensor | None,
         prepacked_scale: torch.Tensor | None,
         prepacked_a_idx: torch.Tensor | None,
+        wgrad_row_index: torch.Tensor | None = None,
+        dx_scatter_pos: torch.Tensor | None = None,
+        dx_recv_tokens: int = 0,
+        dx_top_k: int = 0,
+        identity_reduce: bool = False,
     ) -> torch.Tensor:
         experts, hidden, intermediate = _require_supported(x, w1, w2, activation_type)
         total_m = x_gather_idx.numel()
+        _tuned = _autotune_enabled(total_m, experts)
+        # Token-space ``x`` (physically deduplicated): the FC1 wgrad operand is
+        # gathered from ``x`` by ``wgrad_row_index`` instead of from a
+        # materialised [pairs, hidden] copy, and ``dx`` is reduced per token.
+        ctx.wgrad_row_index = wgrad_row_index
+        ctx.dx_scatter_pos = dx_scatter_pos
+        ctx.dx_recv_tokens = dx_recv_tokens
+        ctx.dx_top_k = dx_top_k
+        wgrad_gather_idx = x_gather_idx if wgrad_row_index is None else wgrad_row_index
         if (prepacked_qdata is None) != (prepacked_scale is None):
             raise ValueError(
                 "prepacked MXFP8 values and scales must be provided together"
@@ -979,7 +1018,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 quantize_mxfp8_varlen_k(
                     x,
                     expert_offsets,
-                    gather_idx=x_gather_idx,
+                    gather_idx=wgrad_gather_idx,
                 )
                 if not is_inference_mode
                 and workspace.training_policy.fc1_wgrad == "mxfp8"
@@ -1084,14 +1123,22 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             fc1_mod = gated_preact_quant_mod(
                 activation_type.value, has_rowvec=b1 is not None
             )
+        if (
+            _FC1_AUTO_TILE
+            and _FC1_CLUSTER_N == 1
+            and total_m >= experts * _FC1_AUTO_MIN_ROWS_PER_EXPERT
+        ):
+            fc1_tile_m, fc1_cluster_m = 256, 2
+        else:
+            fc1_tile_m, fc1_cluster_m = _FC1_TILE_M, _FC1_CLUSTER_M
         fc1_mod.gemm(
             x_mx.qdata,
             w1_mx.qdata,
             preact,
             epi_args=epi_args,
-            tile_M=_FC1_TILE_M,
+            tile_M=fc1_tile_m,
             tile_N=_FC1_TILE_N,
-            cluster_M=_FC1_CLUSTER_M,
+            cluster_M=fc1_cluster_m,
             cluster_N=_FC1_CLUSTER_N,
             persistent=True,
             is_dynamic_persistent=_FC1_DYNAMIC,
@@ -1114,12 +1161,20 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             w2_mx, w2_dgrad_mx = workspace.quantize_weight_pair(
                 "w2", w2, stream_key=stream_key
             )
-        expert_output_buffer = workspace.tensor(
-            "forward.expert_output",
-            (total_m, hidden),
-            torch.bfloat16,
-            x.device,
-            stream_key=stream_key,
+        # identity_reduce: pair rows are already in output order with unit
+        # weights (route-pack path), so the K=1 gather-sum is a pure copy.
+        # Return the GEMM output itself (fresh allocation, not the shared
+        # workspace buffer, so pending backwards never see it overwritten).
+        expert_output_buffer = (
+            torch.empty((total_m, hidden), dtype=torch.bfloat16, device=x.device)
+            if identity_reduce
+            else workspace.tensor(
+                "forward.expert_output",
+                (total_m, hidden),
+                torch.bfloat16,
+                x.device,
+                stream_key=stream_key,
+            )
         )
         expert_output = gemm(
             postact,
@@ -1128,22 +1183,27 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             bias=b2,
             cu_seqlens_m=expert_offsets,
             dynamic_scheduler=False,
-            tuned=_AUTOTUNE,
+            tuned=_tuned,
         )
-        output = torch.empty(token_count, hidden, dtype=x.dtype, device=x.device)
-        router_forward = (
-            _router_forward_grouped_scores if scores_are_grouped else _router_forward
-        )
-        router_forward(
-            y=expert_output,
-            o=output,
-            topk_scores=topk_scores.reshape(-1),
-            s_reverse_scatter_idx=s_reverse_scatter_idx,
-            num_activated_expert_per_token_offset=None,
-            varlen_K_max=top_k,
-            H=hidden,
-            is_varlen_K=False,
-        )
+        if identity_reduce:
+            output = expert_output
+        else:
+            output = torch.empty(token_count, hidden, dtype=x.dtype, device=x.device)
+            router_forward = (
+                _router_forward_grouped_scores
+                if scores_are_grouped
+                else _router_forward
+            )
+            router_forward(
+                y=expert_output,
+                o=output,
+                topk_scores=topk_scores.reshape(-1),
+                s_reverse_scatter_idx=s_reverse_scatter_idx,
+                num_activated_expert_per_token_offset=None,
+                varlen_K_max=top_k,
+                H=hidden,
+                is_varlen_K=False,
+            )
 
         ctx.token_count = token_count
         ctx.top_k = top_k
@@ -1194,7 +1254,11 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
         ) = ctx.saved_tensors
         experts = expert_offsets.numel() - 1
         total_m = x_gather_idx.numel()
+        _tuned = _autotune_enabled(total_m, experts)
         hidden = w2.shape[0]
+        wgrad_gather_idx = (
+            x_gather_idx if ctx.wgrad_row_index is None else ctx.wgrad_row_index
+        )
         workspace = ctx.workspace
         stream_key = ctx.stream_key
         score_grouped = (
@@ -1278,7 +1342,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             dgrad_w2_data = dgrad_w2
             mainloop_kwargs = {}
         dgated_kwargs = {
-            "tuned": _AUTOTUNE,
+            "tuned": _tuned,
             "dynamic_scheduler": False,
             "cu_seqlens_m": expert_offsets,
             "A_idx": dgrad_a_idx,
@@ -1357,7 +1421,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 cu_seqlens_m=expert_offsets,
                 A_idx=dgrad_a_idx,
                 dynamic_scheduler=False,
-                tuned=_AUTOTUNE,
+                tuned=_tuned,
             )
         postact_wgrad_mx = None
         dh_wgrad_mx = None
@@ -1427,7 +1491,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 cu_seqlens_k=expert_offsets,
                 A_idx=x_gather_idx,
                 dynamic_scheduler=False,
-                tuned=_AUTOTUNE,
+                tuned=_tuned,
             )
             dw2 = dw2_base.permute(1, 2, 0)
         else:
@@ -1462,7 +1526,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     dw2_rows,
                     cu_seqlens_k=expert_offsets,
                     dynamic_scheduler=False,
-                    tuned=_AUTOTUNE,
+                    tuned=_tuned,
                 )
                 workspace._mark_fp32_wgrad("w2")
                 dw2 = None
@@ -1472,7 +1536,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     postact_wgrad_mx,
                     cu_seqlens_k=expert_offsets,
                     dynamic_scheduler=False,
-                    tuned=_AUTOTUNE,
+                    tuned=_tuned,
                 )
                 dw2 = dw2_rows.permute(1, 2, 0)
 
@@ -1506,7 +1570,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             out=dx_grouped_buffer,
             cu_seqlens_m=expert_offsets,
             dynamic_scheduler=False,
-            tuned=_AUTOTUNE,
+            tuned=_tuned,
         )
         if workspace.training_policy.fc1_wgrad == "bf16":
             dw1_base = torch.empty(
@@ -1517,9 +1581,9 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                 dh,
                 out=dw1_base.transpose(1, 2),
                 cu_seqlens_k=expert_offsets,
-                A_idx=x_gather_idx,
+                A_idx=wgrad_gather_idx,
                 dynamic_scheduler=False,
-                tuned=_AUTOTUNE,
+                tuned=_tuned,
             )
             dw1 = dw1_base.permute(1, 2, 0)
         else:
@@ -1530,7 +1594,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     "backward.x_k",
                     x,
                     expert_offsets,
-                    gather_idx=x_gather_idx,
+                    gather_idx=wgrad_gather_idx,
                     stream_key=stream_key,
                 )
             if dh_wgrad_mx is None:
@@ -1555,7 +1619,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     dw1_base.transpose(1, 2),
                     cu_seqlens_k=expert_offsets,
                     dynamic_scheduler=False,
-                    tuned=_AUTOTUNE,
+                    tuned=_tuned,
                 )
                 workspace._mark_fp32_wgrad("w1")
                 dw1 = None
@@ -1573,7 +1637,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
                     out=dw1_base.transpose(1, 2),
                     cu_seqlens_k=expert_offsets,
                     dynamic_scheduler=False,
-                    tuned=_AUTOTUNE,
+                    tuned=_tuned,
                 )
                 # PermuteBackward hands AccumulateGrad the contiguous base.
                 dw1 = dw1_base.permute(1, 2, 0)
@@ -1583,16 +1647,26 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
         else:
             db1 = None
 
-        dx = torch.empty(ctx.token_count, hidden, dtype=dout.dtype, device=dout.device)
-        _token_broadcast_backward(
-            dx_reduced=dx,
-            dx_expanded=dx_grouped,
-            s_reverse_scatter_idx=s_reverse_scatter_idx,
-            num_activated_expert_per_token_offset=None,
-            varlen_K_max=ctx.top_k,
-            H=hidden,
-            is_varlen_K=False,
-        )
+        if ctx.dx_scatter_pos is not None:
+            # Token-space x: one segmented sum of the grouped dx rows per token.
+            from .mxfp8_weighted_reduce import segmented_sum_rows_mxfp8
+
+            dx = segmented_sum_rows_mxfp8(
+                dx_grouped, ctx.dx_scatter_pos, ctx.dx_recv_tokens, ctx.dx_top_k
+            )
+        else:
+            dx = torch.empty(
+                ctx.token_count, hidden, dtype=dout.dtype, device=dout.device
+            )
+            _token_broadcast_backward(
+                dx_reduced=dx,
+                dx_expanded=dx_grouped,
+                s_reverse_scatter_idx=s_reverse_scatter_idx,
+                num_activated_expert_per_token_offset=None,
+                varlen_K_max=ctx.top_k,
+                H=hidden,
+                is_varlen_K=False,
+            )
         return (
             dx,
             dw1,
@@ -1600,7 +1674,7 @@ class _Mxfp8ExpertsFunction(torch.autograd.Function):
             dw2,
             db2,
             dtopk_scores,
-            *[None] * 14,
+            *[None] * 19,
         )
 
 
@@ -1624,6 +1698,11 @@ def mxfp8_experts(
     scores_are_grouped: bool = False,
     prepacked_input: BlockScaledOperand | None = None,
     prepacked_a_idx: torch.Tensor | None = None,
+    wgrad_row_index: torch.Tensor | None = None,
+    dx_scatter_pos: torch.Tensor | None = None,
+    dx_recv_tokens: int = 0,
+    dx_top_k: int = 0,
+    identity_reduce: bool = False,
 ) -> torch.Tensor:
     workspace = Mxfp8Workspace() if workspace is None else workspace
     return _Mxfp8ExpertsFunction.apply(
@@ -1647,6 +1726,11 @@ def mxfp8_experts(
         None if prepacked_input is None else prepacked_input.qdata,
         None if prepacked_input is None else prepacked_input.scale,
         prepacked_a_idx,
+        wgrad_row_index,
+        dx_scatter_pos,
+        dx_recv_tokens,
+        dx_top_k,
+        identity_reduce,
     )
 
 

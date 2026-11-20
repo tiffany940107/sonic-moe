@@ -135,11 +135,12 @@ def _rowwise_varlen_m_kernel(
 ):
     row_tile = tl.program_id(0)
     k_tile = tl.program_id(1)
-    rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+    rows = (row_tile * BLOCK_M + tl.arange(0, BLOCK_M)).to(tl.int64)
     row_mask = rows < TOTAL_M
     source_rows = (
         tl.load(gather_ptr + rows, mask=row_mask, other=0) if HAS_GATHER else rows
     )
+    source_rows = source_rows.to(tl.int64)
     offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
     values = tl.load(
         x_ptr + source_rows[:, None] * K + offsets[None, :],
@@ -194,7 +195,7 @@ def _physical_rowwise_linear_sf_kernel(
     """Quantize physical rows once and retain their scales in a linear scratch."""
     row_tile = tl.program_id(0)
     k_tile = tl.program_id(1)
-    rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+    rows = (row_tile * BLOCK_M + tl.arange(0, BLOCK_M)).to(tl.int64)
     row_mask = rows < M
     for group in tl.static_range(BLOCK_K // 32):
         offsets = k_tile * BLOCK_K + group * 32 + tl.arange(0, 32)
@@ -243,7 +244,7 @@ def _physical_rowwise_route_sf_kernel(
     """Quantize physical tokens once and scatter scales to all routed rows."""
     row_tile = tl.program_id(0)
     k_tile = tl.program_id(1)
-    rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+    rows = (row_tile * BLOCK_M + tl.arange(0, BLOCK_M)).to(tl.int64)
     row_mask = rows < M
     offsets = k_tile * BLOCK_K + tl.arange(0, BLOCK_K)
     values = tl.load(
@@ -297,9 +298,10 @@ def _gather_varlen_m_scale_kernel(
     """Gather only scale bytes and store the expert-padded blocked layout."""
     row_tile = tl.program_id(0)
     rk = tl.program_id(1)
-    rows = row_tile * BLOCK_M + tl.arange(0, BLOCK_M)
+    rows = (row_tile * BLOCK_M + tl.arange(0, BLOCK_M)).to(tl.int64)
     row_mask = rows < TOTAL_M
     source_rows = tl.load(gather_ptr + rows, mask=row_mask, other=0)
+    source_rows = source_rows.to(tl.int64)
     k_inner = tl.arange(0, 4)
     scale_byte = tl.load(
         linear_sf_ptr + source_rows[:, None] * (RK * 4) + rk * 4 + k_inner[None, :],
@@ -343,7 +345,7 @@ def _segmented_varlen_k_kernel(
     active_blocks = (end - start + 31) // 32
     block_valid = (active_block >= 0) & (active_block < active_blocks)
 
-    rows = start + active_block * 32 + tl.arange(0, 32)
+    rows = (start + active_block * 32 + tl.arange(0, 32)).to(tl.int64)
     cols = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
     value_mask = block_valid & (rows[:, None] < end) & (cols[None, :] < N)
     source_rows = (
@@ -351,6 +353,7 @@ def _segmented_varlen_k_kernel(
         if HAS_GATHER
         else rows
     )
+    source_rows = source_rows.to(tl.int64)
     values = tl.load(
         x_ptr + source_rows[:, None] * N + cols[None, :],
         mask=value_mask,
@@ -407,7 +410,7 @@ def _segmented_varlen_k_pair_kernel(
     active_blocks = (end - start + 31) // 32
     block_valid = (active_block >= 0) & (active_block < active_blocks)
 
-    rows = start + active_block * 32 + tl.arange(0, 32)
+    rows = (start + active_block * 32 + tl.arange(0, 32)).to(tl.int64)
     cols = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
     row_mask = block_valid & (rows < end)
 
@@ -497,13 +500,14 @@ def _varlen_dual_kernel(
     active_blocks = (end - start + 31) // 32
     block_valid = (active_block >= 0) & (active_block < active_blocks)
 
-    rows = start + active_block * 32 + tl.arange(0, 32)
+    rows = (start + active_block * 32 + tl.arange(0, 32)).to(tl.int64)
     cols = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
     row_valid = block_valid & (rows < end)
     value_mask = row_valid[:, None] & (cols[None, :] < N)
     source_rows = (
         tl.load(gather_ptr + rows, mask=row_valid, other=0) if HAS_GATHER else rows
     )
+    source_rows = source_rows.to(tl.int64)
     offsets = rows[:, None] * N + cols[None, :]
     values = tl.load(
         x_ptr + source_rows[:, None] * N + cols[None, :],
@@ -607,13 +611,14 @@ def _varlen_iso32_dual_kernel(
     active_blocks = (end - start + 31) // 32
     block_valid = (active_block >= 0) & (active_block < active_blocks)
 
-    rows = start + active_block * 32 + tl.arange(0, 32)
+    rows = (start + active_block * 32 + tl.arange(0, 32)).to(tl.int64)
     cols = n_tile * BLOCK_N + tl.arange(0, BLOCK_N)
     row_valid = block_valid & (rows < end)
     value_mask = row_valid[:, None] & (cols[None, :] < N)
     source_rows = (
         tl.load(gather_ptr + rows, mask=row_valid, other=0) if HAS_GATHER else rows
     )
+    source_rows = source_rows.to(tl.int64)
     values = tl.load(
         x_ptr + source_rows[:, None] * N + cols[None, :],
         mask=value_mask,
@@ -1326,6 +1331,11 @@ def _rowwise_linear_kernel(
     )
 
 
+import os as _os
+
+_DEQUANT_TILE = _os.environ.get("SONICMOE_DEQUANT_TILE", "1") != "0"
+
+
 @triton.jit
 def _rowwise_dequant_kernel(
     q_ptr,
@@ -1355,6 +1365,39 @@ def _rowwise_dequant_kernel(
         tl.float32
     )
     tl.store(out_ptr + row * K + offsets, values * scale, mask=mask)
+
+
+@triton.jit
+def _rowwise_dequant_tile_kernel(
+    q_ptr,
+    sf_ptr,
+    out_ptr,
+    q_stride_m,
+    sf_stride_m,
+    M,
+    K: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    """One program per row: vector loads, one scale byte per 32-value group.
+
+    The element-wise kernel above reloads the scale byte for every value and
+    leaves each thread only two values (ncu: 16% of DRAM bandwidth, 660M
+    instructions for 0.9 GB of payload).
+    """
+    row = tl.program_id(0).to(tl.int64)
+    kk = tl.arange(0, BLOCK_K)
+    groups = tl.arange(0, BLOCK_K // 32)
+    kmask = kk < K
+    gmask = groups < K // 32
+    values = tl.load(q_ptr + row * q_stride_m + kk, mask=kmask, other=0.0).to(
+        tl.float32
+    )
+    scale_byte = tl.load(
+        sf_ptr + row * sf_stride_m + groups, mask=gmask, other=1
+    ).to(tl.int32)
+    scale = (tl.maximum(scale_byte, 1) << 23).to(tl.float32, bitcast=True)
+    scaled = tl.reshape(values, (BLOCK_K // 32, 32)) * scale[:, None]
+    tl.store(out_ptr + row * K + kk, tl.reshape(scaled, (BLOCK_K,)), mask=kmask)
 
 
 def _validate(
@@ -1479,7 +1522,20 @@ def dequantize_mxfp8_rows(
         raise ValueError("out must be contiguous with the requested shape and dtype")
     if scale.device != qdata.device or result.device != qdata.device:
         raise ValueError("qdata, scale, and out must be on the same device")
-    if rows:
+    if rows and cols % 32 == 0 and cols <= 4096 and _DEQUANT_TILE:
+        block_k = triton.next_power_of_2(cols)
+        _rowwise_dequant_tile_kernel[(rows,)](
+            qdata,
+            scale.view(torch.uint8),
+            result,
+            qdata.stride(0),
+            scale.stride(0),
+            rows,
+            K=cols,
+            BLOCK_K=block_k,
+            num_warps=4,
+        )
+    elif rows:
         block_k = 256
         _rowwise_dequant_kernel[(rows, triton.cdiv(cols, block_k))](
             qdata,

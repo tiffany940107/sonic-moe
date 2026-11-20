@@ -126,6 +126,11 @@ def _gather_qdata_kernel(
     )
 
 
+import os as _os
+
+_SCALE_TOKEN = _os.environ.get("SONICMOE_SCALE_TOKEN_KERNEL", "1") != "0"
+
+
 @triton.jit
 def _gather_blocked_scale_kernel(
     linear_scale,
@@ -176,6 +181,55 @@ def _gather_blocked_scale_kernel(
         (((row_block * scale_rk + k_block) * 32 + row_inner) * 4 + row_outer) * 4
     ) + k_inner
     tl.store(blocked_scale + blocked_offset, value, mask=valid & sf_mask)
+
+
+@triton.jit
+def _gather_blocked_scale_token_kernel(
+    linear_scale,
+    expert_ids,
+    scatter_pos,
+    indptr,
+    blocked_scale,
+    scale_stride_m,
+    expert_stride_m,
+    sf_k: tl.constexpr,
+    scale_rk: tl.constexpr,
+    top_k: tl.constexpr,
+    num_experts: tl.constexpr,
+    SFP: tl.constexpr,
+):
+    """One program per receive token; empty top-k slots cost two scalar loads.
+
+    The slot-tiled kernel above visits every one of recv_tokens*top_k slots with
+    2-D masked loads although only ~13% map to a local expert.
+    """
+    token = tl.program_id(0).to(tl.int64)
+    sf_col = tl.arange(0, SFP)
+    sf_mask = sf_col < sf_k
+    k_block = sf_col // 4
+    k_inner = sf_col % 4
+    for slot in tl.static_range(0, top_k):
+        position = tl.load(scatter_pos + token * top_k + slot).to(tl.int64)
+        if position >= 0:
+            expert = tl.load(expert_ids + token * expert_stride_m + slot).to(tl.int64)
+            if (expert >= 0) & (expert < num_experts):
+                value = tl.load(
+                    linear_scale + token * scale_stride_m + sf_col,
+                    mask=sf_mask,
+                    other=0,
+                )
+                expert_start = tl.load(indptr + expert).to(tl.int64)
+                padded_start = (expert_start // 128 + expert) * 128
+                padded_row = position + padded_start - expert_start
+                row_block = padded_row // 128
+                row_in_block = padded_row % 128
+                row_inner = row_in_block % 32
+                row_outer = row_in_block // 32
+                blocked_offset = (
+                    (((row_block * scale_rk + k_block) * 32 + row_inner) * 4 + row_outer)
+                    * 4
+                ) + k_inner
+                tl.store(blocked_scale + blocked_offset, value, mask=sf_mask)
 
 
 @dataclass(frozen=True)
@@ -396,25 +450,42 @@ def route_pack_mxfp8(
                 num_warps=4,
             )
         scale_cols = 64
-        _gather_blocked_scale_kernel[
-            (triton.cdiv(num_slots, block_rows), triton.cdiv(sf_k, scale_cols))
-        ](
-            linear_scale.view(torch.uint8),
-            expert_ids,
-            workspace.scatter_pos,
-            workspace.indptr,
-            workspace.scale.view(torch.uint8),
-            linear_scale.stride(0),
-            expert_ids.stride(0),
-            num_slots=num_slots,
-            sf_k=sf_k,
-            scale_rk=(sf_k + 3) // 4,
-            top_k=top_k,
-            num_experts=workspace.local_experts,
-            BLOCK_ROWS=block_rows,
-            BLOCK_COLS=scale_cols,
-            num_warps=4,
-        )
+        if _SCALE_TOKEN and num_slots % top_k == 0:
+            _gather_blocked_scale_token_kernel[(num_slots // top_k,)](
+                linear_scale.view(torch.uint8),
+                expert_ids,
+                workspace.scatter_pos,
+                workspace.indptr,
+                workspace.scale.view(torch.uint8),
+                linear_scale.stride(0),
+                expert_ids.stride(0),
+                sf_k=sf_k,
+                scale_rk=(sf_k + 3) // 4,
+                top_k=top_k,
+                num_experts=workspace.local_experts,
+                SFP=triton.next_power_of_2(sf_k),
+                num_warps=2,
+            )
+        else:
+          _gather_blocked_scale_kernel[
+              (triton.cdiv(num_slots, block_rows), triton.cdiv(sf_k, scale_cols))
+          ](
+              linear_scale.view(torch.uint8),
+              expert_ids,
+              workspace.scatter_pos,
+              workspace.indptr,
+              workspace.scale.view(torch.uint8),
+              linear_scale.stride(0),
+              expert_ids.stride(0),
+              num_slots=num_slots,
+              sf_k=sf_k,
+              scale_rk=(sf_k + 3) // 4,
+              top_k=top_k,
+              num_experts=workspace.local_experts,
+              BLOCK_ROWS=block_rows,
+              BLOCK_COLS=scale_cols,
+              num_warps=4,
+          )
 
     padded_rm = (total_pairs + 127) // 128 + workspace.local_experts - 1
     operand = BlockScaledOperand.from_parts(

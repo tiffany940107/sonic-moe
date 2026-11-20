@@ -55,6 +55,23 @@ def _placement_maps(
     return placement, local_ids, logical_by_rank
 
 
+
+def configure_nccl_for_expert_parallel(p2p_channels: int = 48) -> None:
+    """Raise NCCL's point-to-point channel count for the EP all-to-all.
+
+    The dispatch/combine all-to-all is built from send/recv pairs whose
+    bandwidth scales with the number of NCCL channels (CTAs).  On 8xB300 the
+    default leaves the exchange channel-bound: 48 channels cut EP8 T=61440
+    forward by ~2 ms and the full step by ~3.5 ms; 16 channels cost ~10 ms.
+    Call before the process group is created (NCCL reads these at communicator
+    creation).  An explicit user setting always wins.
+    """
+    import os
+
+    value = str(p2p_channels)
+    os.environ.setdefault("NCCL_MIN_P2P_NCHANNELS", value)
+    os.environ.setdefault("NCCL_MAX_P2P_NCHANNELS", value)
+
 class ExpertParallelMoE(nn.Module):
     """Exact top-k EP module with BF16 masters and MXFP8 expert GEMMs.
 
@@ -75,7 +92,8 @@ class ExpertParallelMoE(nn.Module):
         *,
         process_group=None,
         placement: torch.Tensor | None = None,
-        use_fused_transport: bool = True,
+        use_fused_transport: bool | None = None,
+        unfused_transport_min_elements: int | None = None,
         use_fused_route_pack: bool | None = None,
         use_fused_reduce: bool | None = None,
         route_pack_min_elements: int | None = None,
@@ -108,7 +126,27 @@ class ExpertParallelMoE(nn.Module):
         self.intermediate_size = intermediate_size
         self.activation_function = activation_function
         self.local_experts = num_experts // self.ep_size
+        # ``None`` selects the transport per call: the packed (fused) one-collective
+        # transport is kept for inference and small inputs, while training on
+        # large inputs uses separate collectives, which avoid packing the BF16
+        # gradients into the byte records (measured 4-6% faster end to end at
+        # EP8, T/rank >= 8192, hidden 2048).
+        transport_env = os.environ.get("SONICMOE_MXFP8_EP_FUSED_TRANSPORT", "auto").lower()
+        if use_fused_transport is None and transport_env != "auto":
+            if transport_env not in ("0", "1"):
+                raise ValueError("SONICMOE_MXFP8_EP_FUSED_TRANSPORT must be auto, 0 or 1")
+            use_fused_transport = transport_env == "1"
         self.use_fused_transport = use_fused_transport
+        if unfused_transport_min_elements is None:
+            unfused_transport_min_elements = int(
+                os.environ.get(
+                    "SONICMOE_MXFP8_EP_UNFUSED_TRANSPORT_MIN_ELEMENTS", str(1 << 24)
+                )
+            )
+        if unfused_transport_min_elements < 0:
+            raise ValueError("unfused_transport_min_elements must be non-negative")
+        self.unfused_transport_min_elements = unfused_transport_min_elements
+        self._last_fused_transport = None
         self.use_fused_route_pack = use_fused_route_pack
         self.use_fused_reduce = use_fused_reduce
         if route_pack_min_elements is None:
@@ -180,7 +218,8 @@ class ExpertParallelMoE(nn.Module):
         *,
         process_group=None,
         placement: torch.Tensor | None = None,
-        use_fused_transport: bool = True,
+        use_fused_transport: bool | None = None,
+        unfused_transport_min_elements: int | None = None,
         use_fused_route_pack: bool | None = None,
         use_fused_reduce: bool | None = None,
         route_pack_min_elements: int | None = None,
@@ -200,6 +239,7 @@ class ExpertParallelMoE(nn.Module):
             process_group=process_group,
             placement=placement,
             use_fused_transport=use_fused_transport,
+            unfused_transport_min_elements=unfused_transport_min_elements,
             use_fused_route_pack=use_fused_route_pack,
             use_fused_reduce=use_fused_reduce,
             route_pack_min_elements=route_pack_min_elements,
@@ -361,6 +401,11 @@ class ExpertParallelMoE(nn.Module):
             self._comm_stream = torch.cuda.Stream(device=device, priority=-1)
         return self._comm_stream
 
+    def _resolve_fused_transport(self, x: torch.Tensor, inference: bool) -> bool:
+        if self.use_fused_transport is not None:
+            return self.use_fused_transport
+        return inference or x.numel() < self.unfused_transport_min_elements
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -369,6 +414,10 @@ class ExpertParallelMoE(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         original_shape = hidden_states.shape
         x = hidden_states.view(-1, self.hidden_size)
+        use_fused_transport = self._resolve_fused_transport(
+            x, is_inference_mode or not self.training
+        )
+        self._last_fused_transport = use_fused_transport
         router_logits = F.linear(x, self.router.weight)
         topk_scores, topk_indices = TC_Softmax_Topk_Router_Function.apply(
             router_logits,
@@ -407,14 +456,14 @@ class ExpertParallelMoE(nn.Module):
         aux_loss = None
         if use_mxfp8:
             comm_stream = (
-                self._get_comm_stream(x.device) if self.use_fused_transport else None
+                self._get_comm_stream(x.device) if use_fused_transport else None
             )
             dispatched = dispatch_mxfp8(
                 x,
                 plan,
                 self.process_group,
                 dequantize=not (use_route_pack and expert_inference),
-                packed_transport=self.use_fused_transport,
+                packed_transport=use_fused_transport,
                 comm_stream=comm_stream,
             )
             if not is_inference_mode:

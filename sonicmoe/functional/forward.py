@@ -147,6 +147,9 @@ def _softmax_fwd_small_kernel(
     tl.store(logits_ptr + row * stride_lm + k_offs * stride_ln, y, mask=k_mask)
 
 
+_ITER_TOPK = __import__("os").environ.get("SONICMOE_ITER_TOPK", "1") != "0"
+
+
 @torch.library.custom_op(
     f"{LIBRARY_NAME}::_softmax_topk_fwd",
     mutates_args={"topk_router_score", "topk_router_indices"},
@@ -169,6 +172,17 @@ def _topk_softmax_fwd(
             is_softmax_over_topk=is_softmax_over_topk,
             norm_topk_probs=norm_topk_probs,
         )
+    elif (
+        is_softmax_over_topk
+        and not norm_topk_probs
+        and K <= 32
+        and E <= 1024
+        and router_logits.is_cuda
+        and _ITER_TOPK
+    ):
+        from .topk_iter import topk_softmax_iter
+
+        topk_softmax_iter(router_logits, topk_router_score, topk_router_indices, K)
     else:
         if is_softmax_over_topk:
             topk_results = router_logits.topk(K, dim=-1)

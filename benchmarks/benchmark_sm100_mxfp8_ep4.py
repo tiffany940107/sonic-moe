@@ -49,6 +49,7 @@ def main() -> None:
     )
     parser.add_argument("--skip-router-grad-sync", action="store_true")
     parser.add_argument("--disable-fused-transport", action="store_true")
+    parser.add_argument("--force-fused-transport", action="store_true")
     parser.add_argument("--disable-route-pack", action="store_true")
     parser.add_argument("--force-route-pack", action="store_true")
     parser.add_argument("--disable-fused-reduce", action="store_true")
@@ -96,7 +97,13 @@ def main() -> None:
         activation_function=ActivationType.SWIGLU,
         add_bias=False,
         std=0.02,
-        use_fused_transport=not args.disable_fused_transport,
+        use_fused_transport=(
+            False
+            if args.disable_fused_transport
+            else True
+            if args.force_fused_transport
+            else None
+        ),
         use_fused_route_pack=(
             False
             if args.disable_route_pack
@@ -237,7 +244,7 @@ def main() -> None:
                     "replicated_router_grad_sync": bool(
                         optimizer is not None and not args.skip_router_grad_sync
                     ),
-                    "fused_transport": not args.disable_fused_transport,
+                    "fused_transport": model._last_fused_transport,
                     "route_pack_policy": model.use_fused_route_pack,
                     "fused_reduce_policy": model.use_fused_reduce,
                     "route_pack_enabled": model._last_route_pack_enabled,
